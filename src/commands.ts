@@ -259,10 +259,10 @@ export function resolveRun(payload: string): string | null {
 
 type Field = { key: string; noun: string; title: string; prefix: string; choices: Choice[] }
 
-const MODEL_FIELD: Field = { key: 'model', noun: 'model', title: 'Model', prefix: 'md', choices: MODELS }
-const EFFORT_FIELD: Field = { key: 'effortLevel', noun: 'effort level', title: 'Reasoning effort', prefix: 'ef', choices: EFFORTS }
+const MODEL_FIELD: Field = { key: 'model', noun: 'model', title: 'Model', prefix: 'model', choices: MODELS }
+const EFFORT_FIELD: Field = { key: 'effortLevel', noun: 'effort level', title: 'Reasoning effort', prefix: 'effort', choices: EFFORTS }
 
-const FIELDS: Record<string, Field> = { md: MODEL_FIELD, ef: EFFORT_FIELD }
+const FIELDS: Record<string, Field> = { model: MODEL_FIELD, effort: EFFORT_FIELD }
 
 function choiceView(field: Field): Handled {
   const current = getSetting(field.key)
@@ -325,9 +325,9 @@ function mcpView(): Handled {
     if (i > 0) keyboard.row()
     const state = mcpHealth.get(s.name)
     const mark = state === 'ok' ? '✅' : state === 'auth' ? '🔑' : state === 'down' ? '❌' : '·'
-    keyboard.text(`${mark} ${s.name}`, `mc:${i}`)
+    keyboard.text(`${mark} ${s.name}`, `mcp:${i}`)
   })
-  keyboard.row().text('↻ Check health', 'mc:health')
+  keyboard.row().text('↻ Check health', 'mcp:health')
 
   return {
     text: [
@@ -368,7 +368,7 @@ export async function mcpAction(payload: string): Promise<{ view: Handled; note:
         `transport: ${server.transport}`,
         `health: ${state === 'ok' ? 'connected' : state === 'auth' ? 'needs authentication' : state === 'down' ? 'not connected' : 'unchecked'}`,
       ].join('\n'),
-      keyboard: new InlineKeyboard().text('‹ Back', 'mc:back').text('↻ Check health', 'mc:health'),
+      keyboard: new InlineKeyboard().text('‹ Back', 'mcp:back').text('↻ Check health', 'mcp:health'),
     },
     note: server.name,
   }
@@ -392,7 +392,9 @@ function parseHealth(out: string): Map<string, string> {
 
 /**
  * Callback payloads are capped at 64 bytes and plugin ids are long, so the
- * buttons carry a position in this list rather than a name.
+ * buttons carry a position in this list rather than a name. The prefix in
+ * front of it is spelled out — the cap is on the whole payload, and a word
+ * costs three bytes more than an abbreviation nobody can read.
  */
 let pluginOrder: Plugin[] = []
 
@@ -403,7 +405,7 @@ function pluginsView(): Handled {
   const keyboard = new InlineKeyboard()
   pluginOrder.slice(0, 60).forEach((p, i) => {
     if (i > 0) keyboard.row() // between rows only — a trailing .row() adds an empty one
-    keyboard.text(`${p.enabled ? '✅' : '⬜'} ${p.id.split('@')[0]}`, `pl:${i}`)
+    keyboard.text(`${p.enabled ? '✅' : '⬜'} ${p.id.split('@')[0]}`, `plugin:${i}`)
   })
 
   const on = pluginOrder.filter((p) => p.enabled).length

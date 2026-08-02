@@ -251,13 +251,14 @@ export function registerCallbacks(bot: Bot, emitPermission: PermissionEmitter, r
     }
 
     // ---- MCP server card ----
-    const mc = /^mc:(\d{1,3}|health|back)$/.exec(data)
-    if (mc) {
+    const mcp = /^mcp:(\d{1,3}|health|back)$/.exec(data)
+    if (mcp) {
+      const target = mcp[1]
       // Dialling every server takes seconds; answer the tap first so the
       // button stops spinning while the CLI works.
-      if (mc[1] === 'health') await ctx.answerCallbackQuery({ text: 'Checking…' }).catch(() => {})
-      const { view, note } = await mcpAction(mc[1] === 'back' ? 'back' : mc[1])
-      if (mc[1] !== 'health') await ctx.answerCallbackQuery({ text: note }).catch(() => {})
+      if (target === 'health') await ctx.answerCallbackQuery({ text: 'Checking…' }).catch(() => {})
+      const { view, note } = await mcpAction(target)
+      if (target !== 'health') await ctx.answerCallbackQuery({ text: note }).catch(() => {})
       await ctx
         .editMessageText(markdownToHtml(view.text), {
           parse_mode: 'HTML',
@@ -269,7 +270,7 @@ export function registerCallbacks(bot: Bot, emitPermission: PermissionEmitter, r
     }
 
     // ---- model and effort pickers ----
-    const setting = /^(md|ef):(\d{1,3})$/.exec(data)
+    const setting = /^(model|effort):(\d{1,3})$/.exec(data)
     if (setting) {
       const { view, note } = chooseSetting(setting[1], Number(setting[2]))
       await ctx.answerCallbackQuery({ text: note }).catch(() => {})
@@ -284,9 +285,9 @@ export function registerCallbacks(bot: Bot, emitPermission: PermissionEmitter, r
     }
 
     // ---- plugin toggles ----
-    const pl = /^pl:(\d{1,3})$/.exec(data)
-    if (pl) {
-      const { view, note } = togglePlugin(Number(pl[1]))
+    const plugin = /^plugin:(\d{1,3})$/.exec(data)
+    if (plugin) {
+      const { view, note } = togglePlugin(Number(plugin[1]))
       await ctx.answerCallbackQuery({ text: note }).catch(() => {})
       await ctx
         .editMessageText(markdownToHtml(view.text), {
