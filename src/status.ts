@@ -22,6 +22,10 @@ type Api = Bot['api']
 
 type Beat = {
   api: Api
+  /** Where the line is posted — the turn's chat, or the owner's when redirected. */
+  target: string
+  /** Set when target is not the chat the turn came from. */
+  origin?: string
   /** Fixed wording, if the caller set one. Otherwise words rotate. */
   text?: string
   words: string[]
@@ -54,8 +58,15 @@ export function startHeartbeat(api: Api, chat_id: string): void {
   if (!p.heartbeat) return
   if (beats.has(chat_id)) return
 
+  // A group is an audience. Unless told otherwise the line stays where the
+  // turn happened; with statusChatId set it moves to the owner's chat, so the
+  // group only ever sees the finished message.
+  const redirect = chat_id.startsWith('-') && p.statusChatId && p.statusChatId !== chat_id
+
   const beat: Beat = {
     api,
+    target: redirect ? p.statusChatId : chat_id,
+    origin: redirect ? chat_id : undefined,
     words: p.heartbeatWords,
     word: 0,
     frames: p.heartbeatFrames,
@@ -69,13 +80,16 @@ export function startHeartbeat(api: Api, chat_id: string): void {
   }
   beats.set(chat_id, beat)
 
+  // Out of context the line would just say something is happening somewhere.
+  if (beat.origin) void groupTitle(api, beat.origin)
+
   void api
-    .sendMessage(chat_id, render(beat), { parse_mode: 'HTML', link_preview_options: { is_disabled: true } })
+    .sendMessage(beat.target, render(beat), { parse_mode: 'HTML', link_preview_options: { is_disabled: true } })
     .then((sent) => {
       // The turn may have finished while this was in flight.
       if (beat.cancelled) {
         beat.messageId = sent.message_id
-        settle(chat_id, beat)
+        settle(beat)
         return
       }
       beat.messageId = sent.message_id
@@ -100,17 +114,17 @@ export function stopHeartbeat(chat_id: string): void {
   beats.delete(chat_id)
   beat.cancelled = true
   if (beat.timer) clearInterval(beat.timer)
-  settle(chat_id, beat)
+  settle(beat)
 }
 
-function settle(chat_id: string, beat: Beat): void {
+function settle(beat: Beat): void {
   if (beat.messageId == null) return
   if (!prefs().heartbeatKeep) {
-    void beat.api.deleteMessage(chat_id, beat.messageId).catch(() => {})
+    void beat.api.deleteMessage(beat.target, beat.messageId).catch(() => {})
     return
   }
   void beat.api
-    .editMessageText(chat_id, beat.messageId, renderDone(beat), {
+    .editMessageText(beat.target, beat.messageId, renderDone(beat), {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
     })
@@ -140,7 +154,7 @@ function tick(chat_id: string): void {
   beat.frame = (beat.frame + 1) % beat.frames.length
   if (beat.frame % WORD_EVERY === 0) beat.word = (beat.word + 1) % beat.words.length
   void beat.api
-    .editMessageText(chat_id, beat.messageId, render(beat), {
+    .editMessageText(beat.target, beat.messageId, render(beat), {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
     })
@@ -154,8 +168,27 @@ function render(beat: Beat): string {
   // Elapsed time is what turns a status line into a heartbeat: a frozen clock
   // reads as a hung turn even while the emoji keeps moving.
   const secs = Math.floor((Date.now() - beat.startedAt) / 1000)
-  const line = `${emoji} ${markdownToHtml(`_${word}…_`)} · ${elapsed(secs)}`.trim()
+  const line = `${emoji} ${markdownToHtml(`_${word}…_`)} · ${elapsed(secs)}${where(beat)}`.trim()
   return beat.tip ? `${line}\n\n${markdownToHtml(`_Tip: ${beat.tip}_`)}` : line
+}
+
+/** Names the group a redirected line belongs to; empty when it is in place. */
+function where(beat: Beat): string {
+  if (!beat.origin) return ''
+  return ` · ${markdownToHtml(`_in ${titles.get(beat.origin) ?? 'a group'}_`)}`
+}
+
+const titles = new Map<string, string>()
+
+async function groupTitle(api: Api, chat_id: string): Promise<void> {
+  if (titles.has(chat_id)) return
+  try {
+    const chat = await api.getChat(chat_id)
+    const title = 'title' in chat && chat.title ? chat.title : chat_id
+    titles.set(chat_id, title)
+  } catch {
+    titles.set(chat_id, chat_id)
+  }
 }
 
 /**
@@ -164,7 +197,7 @@ function render(beat: Beat): string {
  */
 function renderDone(beat: Beat): string {
   const secs = Math.floor((Date.now() - beat.startedAt) / 1000)
-  return `${prefs().heartbeatDoneFrame} ${markdownToHtml(`_${beat.doneWord}_`)} · ${elapsed(secs)}`.trim()
+  return `${prefs().heartbeatDoneFrame} ${markdownToHtml(`_${beat.doneWord}_`)} · ${elapsed(secs)}${where(beat)}`.trim()
 }
 
 function elapsed(secs: number): string {

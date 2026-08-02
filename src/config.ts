@@ -127,6 +127,14 @@ export type Access = {
   /** Marker in front of the closing line. Default '✳'. */
   heartbeatDoneFrame?: string
   /**
+   * Where the status line goes when the turn happens in a group. A group is
+   * an audience: the other members want the answer, not a running commentary
+   * on how it was produced. Set this to your own chat id and the status line
+   * (and the activity feed) is delivered there instead, leaving only the
+   * finished message in the group. Empty by default — status stays put.
+   */
+  statusChatId?: string
+  /**
    * Default rendering mode for reply/edit when the caller omits `format`.
    * 'auto' converts common Markdown to Telegram HTML and escapes everything
    * else — the safe default, no caller-side escaping needed.
@@ -230,6 +238,7 @@ export function prefs(a: Access = loadAccess()) {
     heartbeatKeep: a.heartbeatKeep ?? true,
     heartbeatDoneWords: a.heartbeatDoneWords?.length ? a.heartbeatDoneWords : HEARTBEAT_DONE_WORDS,
     heartbeatDoneFrame: a.heartbeatDoneFrame ?? '✳',
+    statusChatId: a.statusChatId ?? '',
     defaultFormat: a.defaultFormat ?? 'auto',
     streaming: a.streaming ?? true,
     streamIntervalMs: Math.max(400, a.streamIntervalMs ?? 1200),

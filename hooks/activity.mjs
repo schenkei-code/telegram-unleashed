@@ -297,10 +297,11 @@ function esc(s) {
 async function publish(token, st, body) {
   const root = (process.env.TELEGRAM_API_ROOT ?? 'https://api.telegram.org').replace(/\/+$/, '')
   const base = `${root}/bot${token}`
+  const target = feedChatId(st.chatId)
 
   if (st.messageId) {
     const res = await call(`${base}/editMessageText`, {
-      chat_id: st.chatId,
+      chat_id: target,
       message_id: st.messageId,
       text: body,
       parse_mode: 'HTML',
@@ -313,7 +314,7 @@ async function publish(token, st, body) {
   }
 
   const res = await call(`${base}/sendMessage`, {
-    chat_id: st.chatId,
+    chat_id: target,
     text: body,
     parse_mode: 'HTML',
     disable_notification: true,
@@ -343,6 +344,21 @@ async function call(url, payload) {
 // ---------------------------------------------------------------------------
 // Plumbing
 // ---------------------------------------------------------------------------
+
+/**
+ * Where the feed is posted. A group turn's commentary belongs to the operator,
+ * not to the group — statusChatId sends it there instead, leaving the group
+ * with just the answer. Same setting the status line uses.
+ */
+function feedChatId(chatId) {
+  if (!chatId?.startsWith('-')) return chatId
+  try {
+    const a = JSON.parse(readFileSync(join(STATE_DIR, 'access.json'), 'utf8'))
+    return a.statusChatId || chatId
+  } catch {
+    return chatId
+  }
+}
 
 function loadToken() {
   if (process.env.TELEGRAM_BOT_TOKEN) return process.env.TELEGRAM_BOT_TOKEN
