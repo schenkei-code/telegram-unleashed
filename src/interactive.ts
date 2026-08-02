@@ -17,7 +17,7 @@ import { InlineKeyboard } from 'grammy'
 import { randomBytes } from 'crypto'
 import { loadAccess, prefs } from './config.js'
 import { markdownToHtml, escapeHtml, collapse } from './format.js'
-import { togglePlugin, resolveRun, chooseSetting } from './commands.js'
+import { togglePlugin, resolveRun, chooseSetting, mcpAction } from './commands.js'
 
 type Api = Bot['api']
 
@@ -247,6 +247,24 @@ export function registerCallbacks(bot: Bot, emitPermission: PermissionEmitter, r
         user_id: senderId,
         ts: new Date().toISOString(),
       })
+      return
+    }
+
+    // ---- MCP server card ----
+    const mc = /^mc:(\d{1,3}|health|back)$/.exec(data)
+    if (mc) {
+      // Dialling every server takes seconds; answer the tap first so the
+      // button stops spinning while the CLI works.
+      if (mc[1] === 'health') await ctx.answerCallbackQuery({ text: 'Checking…' }).catch(() => {})
+      const { view, note } = await mcpAction(mc[1] === 'back' ? 'back' : mc[1])
+      if (mc[1] !== 'health') await ctx.answerCallbackQuery({ text: note }).catch(() => {})
+      await ctx
+        .editMessageText(markdownToHtml(view.text), {
+          parse_mode: 'HTML',
+          link_preview_options: { is_disabled: true },
+          ...(view.keyboard ? { reply_markup: view.keyboard } : {}),
+        })
+        .catch(() => {})
       return
     }
 

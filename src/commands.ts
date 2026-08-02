@@ -29,6 +29,7 @@ import {
   type Plugin,
   type Command,
   type Choice,
+  type McpServer,
 } from './control.js'
 import { read as readHistory, format as formatHistory } from './history.js'
 import { draftSupport } from './stream.js'
@@ -178,13 +179,8 @@ export async function handleCommand(text: string, chat_id: string): Promise<Hand
     case 'plugins':
       return pluginsView()
 
-    case 'mcp': {
-      const servers = listMcp()
-      if (!servers.length) return { text: 'No MCP servers configured.' }
-      return {
-        text: `*MCP servers*\n\n${servers.map((s) => `${s.name} — ${s.scope} (${s.transport})`).join('\n')}`,
-      }
-    }
+    case 'mcp':
+      return mcpView()
 
     case 'history': {
       const n = Number(arg) || 20
@@ -304,6 +300,90 @@ export function chooseSetting(prefix: string, index: number): { view: Handled; n
   } catch (err) {
     return { view: choiceView(field), note: err instanceof Error ? err.message : String(err) }
   }
+}
+
+// ---------------------------------------------------------------------------
+// MCP servers
+// ---------------------------------------------------------------------------
+
+/** Buttons carry a position, since server names blow past the 64-byte cap. */
+let mcpOrder: McpServer[] = []
+
+/**
+ * Health from `claude mcp list`, kept from the last check. The CLI takes a few
+ * seconds because it actually dials every server, so it runs on demand rather
+ * than every time the card is drawn.
+ */
+let mcpHealth = new Map<string, string>()
+
+function mcpView(): Handled {
+  mcpOrder = listMcp()
+  if (!mcpOrder.length) return { text: 'No MCP servers configured.' }
+
+  const keyboard = new InlineKeyboard()
+  mcpOrder.slice(0, 40).forEach((s, i) => {
+    if (i > 0) keyboard.row()
+    const state = mcpHealth.get(s.name)
+    const mark = state === 'ok' ? '✅' : state === 'auth' ? '🔑' : state === 'down' ? '❌' : '·'
+    keyboard.text(`${mark} ${s.name}`, `mc:${i}`)
+  })
+  keyboard.row().text('↻ Check health', 'mc:health')
+
+  return {
+    text: [
+      `*MCP servers* — ${mcpOrder.length} configured`,
+      '',
+      mcpHealth.size ? 'Tap one for details.' : 'Tap check to dial every server.',
+      '',
+      // Better to say it than to offer a button that quietly does nothing:
+      // reconnecting is Claude Code's own command and no MCP server can make
+      // the host re-run it.
+      '_Reconnecting is a terminal command (`/mcp`) — the bridge cannot trigger it._',
+    ].join('\n'),
+    keyboard,
+  }
+}
+
+/** Handle a tap on the MCP card: a server for detail, or the health check. */
+export async function mcpAction(payload: string): Promise<{ view: Handled; note: string }> {
+  if (payload === 'health') {
+    const out = await runCli('mcp_health')
+    mcpHealth = parseHealth(out)
+    const bad = [...mcpHealth.values()].filter((v) => v !== 'ok').length
+    return { view: mcpView(), note: bad ? `${bad} not connected` : 'all connected' }
+  }
+
+  if (payload === 'back') return { view: mcpView(), note: '' }
+
+  const server = mcpOrder[Number(payload)]
+  if (!server) return { view: mcpView(), note: 'Stale list — reopened.' }
+
+  const state = mcpHealth.get(server.name)
+  return {
+    view: {
+      text: [
+        `*${server.name}*`,
+        '',
+        `scope: ${server.scope}`,
+        `transport: ${server.transport}`,
+        `health: ${state === 'ok' ? 'connected' : state === 'auth' ? 'needs authentication' : state === 'down' ? 'not connected' : 'unchecked'}`,
+      ].join('\n'),
+      keyboard: new InlineKeyboard().text('‹ Back', 'mc:back').text('↻ Check health', 'mc:health'),
+    },
+    note: server.name,
+  }
+}
+
+/** Read `claude mcp list` output back into a state per server name. */
+function parseHealth(out: string): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const line of out.split('\n')) {
+    const m = /^(.+?):\s+\S+\s+-\s+(.*)$/.exec(line.trim())
+    if (!m) continue
+    const [, name, verdict] = m
+    map.set(name, /connected/i.test(verdict) ? 'ok' : /auth/i.test(verdict) ? 'auth' : 'down')
+  }
+  return map
 }
 
 // ---------------------------------------------------------------------------
