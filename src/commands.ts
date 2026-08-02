@@ -43,9 +43,20 @@ function slug(name: string): string {
     .slice(0, 32)
 }
 
+/**
+ * How the bridge shuts itself down, handed over by the server so this module
+ * does not have to import it back and close the loop.
+ */
+let restart: (() => void) | null = null
+
+export function setRestartHandler(fn: () => void): void {
+  restart = fn
+}
+
 /** Commands the plugin answers itself, in menu order. */
 const NATIVE: { name: string; description: string }[] = [
   { name: 'commands', description: 'List every skill and command available' },
+  { name: 'reload', description: 'Restart the bridge to pick up plugin changes' },
   { name: 'model', description: 'Model — tap to switch' },
   { name: 'effort', description: 'Reasoning effort — tap to switch' },
   { name: 'plugins', description: 'Plugins — tap to turn on or off' },
@@ -173,6 +184,20 @@ export async function handleCommand(text: string, chat_id: string): Promise<Hand
         setSetting(field.key, choice.value)
       }
       return choiceView(field)
+    }
+
+    case 'reload': {
+      if (!restart) return { text: 'No restart handler — the bridge cannot reload itself.' }
+      // Long enough for this answer to leave the process that is about to die.
+      setTimeout(() => restart?.(), 1500)
+      return {
+        text: [
+          '*Restarting the bridge*',
+          '',
+          'Picking up whatever changed in the plugin. Back in a moment.',
+          'If it stays quiet, run `/reload-plugins` in the terminal.',
+        ].join('\n'),
+      }
     }
 
     case 'plugins':
