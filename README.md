@@ -1,5 +1,7 @@
 <div align="center">
 
+**hunch** · intentional agent
+
 # telegram-unleashed
 
 ### Your agent, in your pocket — and it types back.
@@ -13,8 +15,8 @@ and decisions you settle with a thumb.
 
 ---
 
-*A fork of the official `telegram` plugin, whose access-control model is
-carried over unchanged.*
+*Built by **hunch intentional agent**. A fork of the official `telegram`
+plugin, whose access-control model is carried over unchanged.*
 
 ## Install
 
@@ -196,3 +198,13 @@ TELEGRAM_CHANNEL=telegram-dev bun run test/mcp.test.ts <chat_id>   # end-to-end
 The end-to-end test spawns the server over stdio exactly as Claude Code does,
 verifies the guard rails reject a non-allowlisted chat and refuse to attach
 channel state, and sends real messages.
+
+---
+
+<div align="center">
+
+**hunch** · intentional agent
+
+*Agents that act on purpose, not on prompt.*
+
+</div>
