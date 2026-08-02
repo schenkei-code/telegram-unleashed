@@ -9,6 +9,10 @@
  * keeps one Telegram message in sync with it — the user watches the work
  * happen instead of waiting for the summary.
  *
+ * The card is a view, not a log: every new assistant paragraph deletes the
+ * previous card and opens a fresh one, so what stands in the chat is the work
+ * belonging to the paragraph being written rather than the whole turn.
+ *
  * Wired to PreToolUse / PostToolUse / UserPromptSubmit / Stop. Each event is a
  * fresh process, so all state lives on disk next to the channel credentials.
  *
@@ -185,8 +189,30 @@ function ingest(st, entry) {
   if (entry.type !== 'assistant' || !Array.isArray(msg.content)) return
   for (const block of msg.content) {
     // Thinking stays private; tool_use is already covered by PreToolUse.
-    if (block?.type === 'text' && block.text?.trim()) pushLine(st, { kind: 'text', text: block.text.trim() })
+    if (block?.type === 'text' && block.text?.trim()) {
+      // A new paragraph closes the card that came before it. Without this the
+      // card grows for the whole turn and ends up a wall of tool lines nobody
+      // scrolls back through.
+      rollCard(st)
+      pushLine(st, { kind: 'text', text: block.text.trim() })
+    }
   }
+}
+
+/**
+ * Retire the current card and start an empty one. The old message is queued for
+ * deletion rather than left behind — the feed is a live view of the work, not a
+ * log, and a chat full of superseded cards defeats the point.
+ */
+function rollCard(st) {
+  if (!st.lines?.length) return
+  if (st.messageId) {
+    st.stale = st.stale ?? []
+    st.stale.push(st.messageId)
+  }
+  st.messageId = null
+  st.lines = []
+  st.lastBody = null
 }
 
 /** Chat and message id of an inbound channel tag, or null if this isn't one. */
@@ -299,6 +325,15 @@ async function publish(token, st, body) {
   const base = `${root}/bot${token}`
   const target = feedChatId(st.chatId)
   if (!target) return null
+
+  // Cards superseded by a new paragraph. Deletion is best effort: a message the
+  // API refuses to remove is dropped from the queue anyway, or every later
+  // event would retry it forever.
+  if (st.stale?.length) {
+    const queued = st.stale
+    st.stale = []
+    for (const id of queued) await call(`${base}/deleteMessage`, { chat_id: target, message_id: id })
+  }
 
   if (st.messageId) {
     const res = await call(`${base}/editMessageText`, {
