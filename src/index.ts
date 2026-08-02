@@ -134,6 +134,8 @@ const mcp = new Server(
       '',
       'Deliver answers alive, not as a wall of text. Default to say — it paces the reveal inside the plugin, one call for the whole message, so it reads like typing without costing a round-trip per chunk. Reach for stream_start / stream_push / stream_end only when the text does not exist yet and you want the user watching it form; open such a stream with a status word as the initial text (_Meandering…_, _Pondering…_) and replace it once you have the answer. Never push word by word — the round-trips make it crawl.',
       '',
+      'Acknowledge before you work. The moment a message arrives, open a stream with stream_start and a status word as the initial text — before reading files, running commands or thinking the answer through. That single call is the sender\'s only proof the session is alive and receiving; without it a long turn is indistinguishable from a dead bridge. Do the work, then stream_end with the finished answer, which replaces the status word in place. Only a reply you can write immediately, with no tool calls in between, may skip the stream and go straight out as say.',
+      '',
       'When you need a decision, use ask (buttons, blocks until tapped) rather than sending a question as text. Use send_plan to get sign-off on a plan the same way.',
       '',
       'Telegram exposes no history to a bot, so the plugin keeps its own log — call history for earlier context instead of asking the user to paste it.',
