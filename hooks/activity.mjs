@@ -97,11 +97,15 @@ async function main() {
     st.messageId = null
     st.lines = []
     st.tokens = 0
+    // Claude Code's own clock starts here, not when Telegram received the
+    // message: between the two sit the relay and the queue. Handing the moment
+    // over is what makes the two clocks read the same.
+    st.turnStart = Date.now()
   }
 
   // Hand the running count to the bridge process, which puts it on the status
   // line the way the terminal puts it next to the spinner.
-  if (st.chatId) publishTokens(st.chatId, st.tokens ?? 0)
+  if (st.chatId) publishTurn(st.chatId, st.tokens ?? 0, st.turnStart)
 
   const finished = event === 'Stop'
 
@@ -295,7 +299,9 @@ function toolLine(name, input) {
   if (/telegram-unleashed/.test(name)) return null
 
   const short = name.replace(/^mcp__[^_]*__/, '').replace(/^mcp__/, '')
-  const file = (p) => (typeof p === 'string' ? basename(p) : '')
+  // The whole path, as the terminal prints it. A monospace block scrolls
+  // sideways instead of wrapping, so a long line costs a swipe, not the layout.
+  const file = (p) => (typeof p === 'string' ? p : '')
   // Name and argument stay apart so the card can set them differently — the
   // terminal leans on colour for that, a Telegram message on weight and font.
   const call = (arg, as = short) => ({ kind: 'tool', name: as, arg })
@@ -314,8 +320,9 @@ function toolLine(name, input) {
     case 'Bash':
     case 'PowerShell':
       // The command itself, not the description — a paraphrase of a shell
-      // command is strictly less information than the command.
-      return call(clip(input.command || input.description || '', 160))
+      // command is strictly less information than the command. Its line breaks
+      // survive too: the terminal shows a heredoc shaped like a heredoc.
+      return call(keep(input.command || input.description || '', 600))
     case 'Grep':
       return call(clip(input.pattern ?? '', 50))
     case 'Glob':
@@ -386,7 +393,7 @@ function attachResult(st, text) {
   if (!body) return
 
   const all = body.split('\n').filter((l) => l.trim())
-  const shown = all.slice(0, RESULT_LINES).map((l) => clip(l, 76))
+  const shown = all.slice(0, RESULT_LINES).map((l) => clip(l, 200))
   const hidden = all.length - shown.length
   if (hidden > 0) shown.push(`… +${hidden} line${hidden === 1 ? '' : 's'}`)
   last.result = shown
@@ -395,6 +402,16 @@ function attachResult(st, text) {
 function clip(s, n) {
   const one = String(s).replace(/\s+/g, ' ').trim()
   return one.length > n ? one.slice(0, n - 1) + '…' : one
+}
+
+/** Like clip, but keeps the line breaks — a command is shaped how it was typed. */
+function keep(s, n) {
+  const text = String(s)
+    .split('\n')
+    .map((l) => l.replace(/\s+$/, ''))
+    .join('\n')
+    .trim()
+  return text.length > n ? text.slice(0, n - 1) + '…' : text
 }
 
 // ---------------------------------------------------------------------------
@@ -422,7 +439,10 @@ function render(st) {
       parts.push(`● ${line.text}`)
       continue
     }
-    parts.push(`● ${line.name}${line.arg ? `(${line.arg})` : ''}`)
+    // A multi-line command keeps its shape, its continuation lines indented
+    // under the call the way the terminal lays them out.
+    const arg = line.arg ? `(${line.arg.split('\n').join('\n  ')})` : ''
+    parts.push(`● ${line.name}${arg}`)
     if (line.result?.length) {
       parts.push(`  ⎿  ${line.result[0]}`)
       for (const extra of line.result.slice(1)) parts.push(`     ${extra}`)
@@ -530,15 +550,18 @@ function loadToken() {
 }
 
 /**
- * The turn's token count, in a file the bridge process polls. Two processes,
- * no channel between them: the hook is spawned per event and the server is
- * long-lived, so disk is the only thing they share.
+ * The turn's token count and start time, in a file the bridge process reads.
+ * Two processes, no channel between them: the hook is spawned per event and
+ * the server is long-lived, so disk is the only thing they share.
  */
-function publishTokens(chatId, tokens) {
+function publishTurn(chatId, tokens, startedAt) {
   try {
     const dir = join(STATE_DIR, 'turn')
     mkdirSync(dir, { recursive: true })
-    writeFileSync(join(dir, `${sanitize(chatId)}.json`), JSON.stringify({ tokens, at: Date.now() }))
+    writeFileSync(
+      join(dir, `${sanitize(chatId)}.json`),
+      JSON.stringify({ tokens, startedAt: startedAt ?? null, at: Date.now() }),
+    )
   } catch {}
 }
 

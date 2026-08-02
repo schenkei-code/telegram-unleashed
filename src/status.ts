@@ -196,8 +196,8 @@ function render(beat: Beat): string {
   const word = beat.text ?? beat.words[beat.word] ?? 'Working'
   // Elapsed time is what turns a status line into a heartbeat: a frozen clock
   // reads as a hung turn even while the emoji keeps moving.
-  const secs = Math.floor((Date.now() - beat.startedAt) / 1000)
-  const line = `${emoji} ${word}… (${elapsed(secs)}${tokens(beat)})${where(beat)}`
+  const turn = turnState(beat)
+  const line = `${emoji} ${word}… (${elapsed(seconds(beat, turn))}${tokenSuffix(turn)})${where(beat)}`
   return block(beat.tip ? `${line}\n  ⎿  Tip: ${beat.tip}` : line)
 }
 
@@ -211,21 +211,41 @@ function block(text: string): string {
 }
 
 /**
- * The turn's token count, as the terminal shows it beside the spinner. Written
- * by the activity hook, which is the only part of this plugin that gets to see
- * Claude Code's usage numbers. Absent or stale, the clock stands on its own.
+ * What the activity hook knows about the running turn: how many tokens it has
+ * produced and when Claude Code started it. The hook reads the transcript,
+ * which is the same source the terminal's own spinner counts from — so both
+ * lines show the same numbers rather than two independent measurements.
+ *
+ * Null when the file belongs to a turn that ended before this one began; a
+ * count from the last turn would be a lie about this one.
  */
-function tokens(beat: Beat): string {
+function turnState(beat: Beat): { tokens: number; startedAt: number | null } | null {
   try {
     const file = join(STATE_DIR, 'turn', `${beat.origin ?? beat.target}.json`.replace(/[^\w.-]/g, '_'))
-    const { tokens: n, at } = JSON.parse(readFileSync(file, 'utf8'))
-    if (typeof n !== 'number' || n <= 0) return ''
-    // A count from a turn that is already over would be a lie about this one.
-    if (typeof at === 'number' && at < beat.startedAt) return ''
-    return ` · ↓ ${n >= 1000 ? `${(n / 1000).toFixed(1)}k` : n} tokens`
+    const { tokens, startedAt, at } = JSON.parse(readFileSync(file, 'utf8'))
+    if (typeof at === 'number' && at < beat.startedAt) return null
+    return {
+      tokens: typeof tokens === 'number' ? tokens : 0,
+      startedAt: typeof startedAt === 'number' && startedAt >= beat.startedAt ? startedAt : null,
+    }
   } catch {
-    return ''
+    return null
   }
+}
+
+/**
+ * Seconds on the clock. Counted from the moment Claude Code took the turn, not
+ * from the moment Telegram handed the message over — the relay and the queue
+ * sit between those two, and the terminal counts from the later one.
+ */
+function seconds(beat: Beat, turn: ReturnType<typeof turnState>): number {
+  return Math.floor((Date.now() - (turn?.startedAt ?? beat.startedAt)) / 1000)
+}
+
+function tokenSuffix(turn: ReturnType<typeof turnState>): string {
+  const n = turn?.tokens ?? 0
+  if (n <= 0) return ''
+  return ` · ↓ ${n >= 1000 ? `${(n / 1000).toFixed(1)}k` : n} tokens`
 }
 
 /** Names the group a redirected line belongs to; empty when it is in place. */
@@ -252,8 +272,8 @@ async function groupTitle(api: Api, chat_id: string): Promise<void> {
  * is still in flight.
  */
 function renderDone(beat: Beat): string {
-  const secs = Math.floor((Date.now() - beat.startedAt) / 1000)
-  return block(`${prefs().heartbeatDoneFrame} ${beat.doneWord} (${elapsed(secs)}${tokens(beat)})${where(beat)}`)
+  const turn = turnState(beat)
+  return block(`${prefs().heartbeatDoneFrame} ${beat.doneWord} (${elapsed(seconds(beat, turn))}${tokenSuffix(turn)})${where(beat)}`)
 }
 
 function elapsed(secs: number): string {
