@@ -85,7 +85,12 @@ async function main() {
     // New turn — retire the previous card so the next line opens a fresh one.
     st.messageId = null
     st.lines = []
+    st.tokens = 0
   }
+
+  // Hand the running count to the bridge process, which puts it on the status
+  // line the way the terminal puts it next to the spinner.
+  if (st.chatId) publishTokens(st.chatId, st.tokens ?? 0)
 
   const finished = event === 'Stop'
 
@@ -186,13 +191,23 @@ function ingest(st, entry) {
       if (st.seenInbound.length > 50) st.seenInbound = st.seenInbound.slice(-50)
       st.messageId = null
       st.lines = []
+      st.tokens = 0
     }
     return
   }
 
   const msg = entry?.message
   if (!msg) return
-  if (entry.type !== 'assistant' || !Array.isArray(msg.content)) return
+  if (entry.type !== 'assistant') return
+
+  // What the terminal counts next to the spinner: tokens the model has
+  // produced this turn. The plugin's own process never sees these — Claude Code
+  // reports usage to the transcript, not to an MCP server — so the count is
+  // handed over on disk.
+  const out = msg.usage?.output_tokens
+  if (typeof out === 'number') st.tokens = (st.tokens ?? 0) + out
+
+  if (!Array.isArray(msg.content)) return
   for (const block of msg.content) {
     // Thinking stays private; tool_use is already covered by PreToolUse.
     if (block?.type === 'text' && block.text?.trim()) {
@@ -247,8 +262,10 @@ function pushLine(st, line) {
   if (!line) return
   st.lines = st.lines ?? []
   const prev = st.lines[st.lines.length - 1]
-  // Consecutive identical entries are noise (retries, repeated reads).
-  if (prev && prev.kind === line.kind && prev.text === line.text) return
+  // Consecutive identical entries are noise (retries, repeated reads). Compare
+  // every field that identifies one: a tool call carries name and argument, not
+  // text, and comparing an absent field collapses every call into the first.
+  if (prev && prev.kind === line.kind && prev.text === line.text && prev.name === line.name && prev.arg === line.arg) return
   // A long stretch of tool calls with no prose between them would otherwise
   // grow one card past what anyone reads on a phone. Paragraphs alone are not
   // a reliable break: a turn can run twenty tools without saying a word.
@@ -268,15 +285,21 @@ function toolLine(name, input) {
 
   const short = name.replace(/^mcp__[^_]*__/, '').replace(/^mcp__/, '')
   const file = (p) => (typeof p === 'string' ? basename(p) : '')
-  const call = (arg) => ({ kind: 'tool', text: `${short}(${arg})` })
+  // Name and argument stay apart so the card can set them differently — the
+  // terminal leans on colour for that, a Telegram message on weight and font.
+  const call = (arg, as = short) => ({ kind: 'tool', name: as, arg })
 
   switch (short) {
     case 'Read':
-    case 'Write':
-    case 'Edit':
       return call(file(input.file_path))
+    case 'Write':
+      return call(file(input.file_path), 'Create')
+    // The terminal calls an edit an Update, and the wording is the point of
+    // matching it: this card exists to read like the one on the machine.
+    case 'Edit':
+      return call(file(input.file_path), 'Update')
     case 'NotebookEdit':
-      return call(file(input.notebook_path))
+      return call(file(input.notebook_path), 'Update')
     case 'Bash':
     case 'PowerShell':
       // The command itself, not the description — a paraphrase of a shell
@@ -302,18 +325,46 @@ function toolLine(name, input) {
   }
 }
 
-/** The result the terminal prints under a call, or '' when there is nothing. */
+/**
+ * The result the terminal prints under a call, or '' when there is nothing.
+ *
+ * An edit's raw response is the whole patch, which is useless at this size —
+ * the terminal summarises it as a line count and so does this. Same for a read:
+ * the file's contents are not news, the fact that it was read is.
+ */
 function resultText(payload) {
   const r = payload.tool_response ?? payload.tool_result ?? payload.result
   if (r == null) return ''
   if (typeof r === 'string') return r
-  // Structured responses vary by tool; take the first field that reads as text.
+  if (typeof r !== 'object') return ''
+
+  if (Array.isArray(r.structuredPatch)) {
+    let added = 0
+    let removed = 0
+    for (const hunk of r.structuredPatch) {
+      for (const l of hunk?.lines ?? []) {
+        if (l.startsWith('+')) added++
+        else if (l.startsWith('-')) removed++
+      }
+    }
+    if (added || removed) return `Added ${plural(added, 'line')}, removed ${plural(removed, 'line')}`
+    if (r.type === 'create') return 'Created'
+  }
+
+  const numLines = r.file?.numLines
+  if (typeof numLines === 'number') return `Read ${plural(numLines, 'line')}`
+
+  // Otherwise take the first field that reads as text.
   const candidate = r.stdout ?? r.output ?? r.content ?? r.text ?? r.message
   if (typeof candidate === 'string') return candidate
   if (Array.isArray(candidate)) {
     return candidate.map((c) => (typeof c === 'string' ? c : (c?.text ?? ''))).join('\n')
   }
   return ''
+}
+
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? '' : 's'}`
 }
 
 /** Hang a result off the call it belongs to, rather than pushing a new line. */
@@ -340,9 +391,12 @@ function clip(s, n) {
 // ---------------------------------------------------------------------------
 
 /**
- * The card, in the terminal's own shape: a bullet per step, results indented
- * beneath the call that produced them. Rendered as one monospace block so the
- * indentation survives — a chat bubble reflows it into prose otherwise.
+ * The card, in the terminal's own shape: a bullet per step, the call as
+ * `Tool(argument)`, its result indented beneath it under the corner marker.
+ *
+ * One monospace block, because that is what a terminal is: the indentation of
+ * a result under its call only survives in a fixed-width font, and it is the
+ * indentation that makes the shape readable at a glance.
  *
  * No trailing "working…" marker: the status line the plugin posts alongside
  * carries the clock and the closing word, and saying it twice is noise.
@@ -352,8 +406,12 @@ function render(st) {
   for (const line of st.lines ?? []) {
     // Prose opens a paragraph the way it does in the terminal; consecutive
     // tool calls stay packed, because a phone screen is not a terminal.
-    if (line.kind === 'text' && parts.length) parts.push('')
-    parts.push(`● ${line.text}`)
+    if (line.kind === 'text') {
+      if (parts.length) parts.push('')
+      parts.push(`● ${line.text}`)
+      continue
+    }
+    parts.push(`● ${line.name}${line.arg ? `(${line.arg})` : ''}`)
     if (line.result?.length) {
       parts.push(`  ⎿  ${line.result[0]}`)
       for (const extra of line.result.slice(1)) parts.push(`     ${extra}`)
@@ -458,6 +516,19 @@ function loadToken() {
     }
   } catch {}
   return null
+}
+
+/**
+ * The turn's token count, in a file the bridge process polls. Two processes,
+ * no channel between them: the hook is spawned per event and the server is
+ * long-lived, so disk is the only thing they share.
+ */
+function publishTokens(chatId, tokens) {
+  try {
+    const dir = join(STATE_DIR, 'turn')
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, `${sanitize(chatId)}.json`), JSON.stringify({ tokens, at: Date.now() }))
+  } catch {}
 }
 
 function loadState(file) {

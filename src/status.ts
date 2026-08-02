@@ -19,7 +19,9 @@
  */
 
 import type { Bot } from 'grammy'
-import { prefs, trace } from './config.js'
+import { readFileSync } from 'fs'
+import { join } from 'path'
+import { prefs, trace, STATE_DIR } from './config.js'
 import { markdownToHtml } from './format.js'
 
 type Api = Bot['api']
@@ -195,8 +197,26 @@ function render(beat: Beat): string {
   // Elapsed time is what turns a status line into a heartbeat: a frozen clock
   // reads as a hung turn even while the emoji keeps moving.
   const secs = Math.floor((Date.now() - beat.startedAt) / 1000)
-  const line = `${emoji} ${markdownToHtml(`_${word}…_`)} · ${elapsed(secs)}${where(beat)}`.trim()
-  return beat.tip ? `${line}\n\n${markdownToHtml(`_Tip: ${beat.tip}_`)}` : line
+  const line = `${emoji} ${markdownToHtml(`_${word}…_`)} (${elapsed(secs)}${tokens(beat)})${where(beat)}`
+  return beat.tip ? `${line}\n  ⎿  ${markdownToHtml(`_Tip: ${beat.tip}_`)}` : line
+}
+
+/**
+ * The turn's token count, as the terminal shows it beside the spinner. Written
+ * by the activity hook, which is the only part of this plugin that gets to see
+ * Claude Code's usage numbers. Absent or stale, the clock stands on its own.
+ */
+function tokens(beat: Beat): string {
+  try {
+    const file = join(STATE_DIR, 'turn', `${beat.origin ?? beat.target}.json`.replace(/[^\w.-]/g, '_'))
+    const { tokens: n, at } = JSON.parse(readFileSync(file, 'utf8'))
+    if (typeof n !== 'number' || n <= 0) return ''
+    // A count from a turn that is already over would be a lie about this one.
+    if (typeof at === 'number' && at < beat.startedAt) return ''
+    return ` · ↓ ${n >= 1000 ? `${(n / 1000).toFixed(1)}k` : n} tokens`
+  } catch {
+    return ''
+  }
 }
 
 /** Names the group a redirected line belongs to; empty when it is in place. */
@@ -224,7 +244,7 @@ async function groupTitle(api: Api, chat_id: string): Promise<void> {
  */
 function renderDone(beat: Beat): string {
   const secs = Math.floor((Date.now() - beat.startedAt) / 1000)
-  return `${prefs().heartbeatDoneFrame} ${markdownToHtml(`_${beat.doneWord}_`)} · ${elapsed(secs)}${where(beat)}`.trim()
+  return `${prefs().heartbeatDoneFrame} ${markdownToHtml(`_${beat.doneWord}_`)} (${elapsed(secs)}${tokens(beat)})${where(beat)}`
 }
 
 function elapsed(secs: number): string {
