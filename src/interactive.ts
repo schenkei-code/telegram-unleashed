@@ -17,7 +17,7 @@ import { InlineKeyboard } from 'grammy'
 import { randomBytes } from 'crypto'
 import { loadAccess, prefs } from './config.js'
 import { markdownToHtml, escapeHtml, collapse } from './format.js'
-import { togglePlugin } from './commands.js'
+import { togglePlugin, resolveRun } from './commands.js'
 
 type Api = Bot['api']
 
@@ -206,11 +206,18 @@ export function sendPlan(
 
 type PermissionEmitter = (request_id: string, behavior: 'allow' | 'deny') => void
 
+/** Hands a message to the session. Injected because the transport lives in index. */
+type Relay = (
+  chat_id: string,
+  text: string,
+  meta: { user: string; user_id: string; ts: string },
+) => void
+
 /**
  * Wire the single callback_query handler. Every interactive element routes
  * through here; authorisation is checked once, centrally.
  */
-export function registerCallbacks(bot: Bot, emitPermission: PermissionEmitter): void {
+export function registerCallbacks(bot: Bot, emitPermission: PermissionEmitter, relayCommand: Relay): void {
   bot.on('callback_query:data', async ctx => {
     const data = ctx.callbackQuery.data ?? ''
     const senderId = String(ctx.from.id)
@@ -222,6 +229,26 @@ export function registerCallbacks(bot: Bot, emitPermission: PermissionEmitter): 
     }
 
     const who = ctx.from.username ? `@${ctx.from.username}` : senderId
+
+    // ---- run button on a command card ----
+    const run = /^run:(\d{1,3}|cancel)$/.exec(data)
+    if (run) {
+      const command = resolveRun(run[1])
+      if (!command) {
+        await ctx.answerCallbackQuery({ text: run[1] === 'cancel' ? 'Cancelled.' : 'Stale — send it again.' }).catch(() => {})
+        await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {})
+        return
+      }
+      await ctx.answerCallbackQuery({ text: command }).catch(() => {})
+      // Drop the buttons so the same card cannot be fired twice.
+      await ctx.editMessageReplyMarkup({ reply_markup: undefined }).catch(() => {})
+      relayCommand(String(ctx.chat?.id ?? ''), command, {
+        user: ctx.from.username ?? senderId,
+        user_id: senderId,
+        ts: new Date().toISOString(),
+      })
+      return
+    }
 
     // ---- plugin toggles ----
     const pl = /^pl:(\d{1,3})$/.exec(data)

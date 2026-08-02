@@ -180,7 +180,10 @@ function emitPermission(request_id: string, behavior: 'allow' | 'deny'): void {
   })
 }
 
-registerCallbacks(bot, emitPermission)
+registerCallbacks(bot, emitPermission, (chat_id, text, meta) => {
+  startTyping(bot.api, chat_id)
+  relay(chat_id, text, meta)
+})
 
 await mcp.connect(new StdioServerTransport())
 
@@ -381,18 +384,42 @@ async function handleInbound(
 
   const imagePath = downloadImage ? await downloadImage() : undefined
 
-  mcp
+  relay(chat_id, text, {
+    message_id: msgId != null ? String(msgId) : undefined,
+    user: from.username ?? String(from.id),
+    user_id: String(from.id),
+    ts: new Date((ctx.message?.date ?? 0) * 1000).toISOString(),
+    image_path: imagePath,
+    attachment,
+  })
+}
+
+/**
+ * Hand a message to the session. Split out from the inbound handler because a
+ * tapped button raises the same event without there being a message to read it
+ * from — the run button on a command card goes through here too.
+ */
+function relay(
+  chat_id: string,
+  text: string,
+  meta: {
+    message_id?: string
+    user: string
+    user_id: string
+    ts: string
+    image_path?: string
+    attachment?: AttachmentMeta
+  },
+): void {
+  const { attachment, ...rest } = meta
+  void mcp
     .notification({
       method: 'notifications/claude/channel',
       params: {
         content: text,
         meta: {
           chat_id,
-          ...(msgId != null ? { message_id: String(msgId) } : {}),
-          user: from.username ?? String(from.id),
-          user_id: String(from.id),
-          ts: new Date((ctx.message?.date ?? 0) * 1000).toISOString(),
-          ...(imagePath ? { image_path: imagePath } : {}),
+          ...Object.fromEntries(Object.entries(rest).filter(([, v]) => v !== undefined)),
           ...(attachment
             ? {
                 attachment_kind: attachment.kind,
@@ -406,11 +433,11 @@ async function handleInbound(
       },
     })
     .then(() => {
-      trace(`relayed msg=${msgId ?? '?'} chat=${chat_id} (${text.length} chars)`)
+      trace(`relayed msg=${meta.message_id ?? '?'} chat=${chat_id} (${text.length} chars)`)
     })
     .catch(err => {
       stopTyping(chat_id)
-      trace(`relay FAILED msg=${msgId ?? '?'} chat=${chat_id}: ${err}`)
+      trace(`relay FAILED msg=${meta.message_id ?? '?'} chat=${chat_id}: ${err}`)
       process.stderr.write(`telegram-unleashed: failed to deliver inbound: ${err}\n`)
     })
 }

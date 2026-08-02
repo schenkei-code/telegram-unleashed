@@ -15,7 +15,7 @@
 
 import type { Bot } from 'grammy'
 import { InlineKeyboard } from 'grammy'
-import { listCommands, listPlugins, listMcp, setPlugin, type Plugin } from './control.js'
+import { listCommands, listPlugins, listMcp, setPlugin, type Plugin, type Command } from './control.js'
 import { read as readHistory, format as formatHistory } from './history.js'
 import { draftSupport } from './stream.js'
 import { CHANNEL } from './config.js'
@@ -115,6 +115,16 @@ export function handleCommand(text: string, chat_id: string): Handled | null {
   const m = /^\/([a-z0-9_]{1,32})(?:@\w+)?(?:\s+([\s\S]*))?$/.exec(text.trim())
   if (!m) return null
   const [, name, arg = ''] = m
+
+  // A tapped menu entry is a bare word with no context — the blurb Telegram
+  // shows is clipped to a line, and there is no way to pass an argument. So a
+  // bare command opens a card with the full description and a run button;
+  // typing one with arguments still goes straight through.
+  if (!nativeNames.has(name) && !arg.trim()) {
+    const card = commandCard(name)
+    if (card) return card
+  }
+
   if (!nativeNames.has(name)) return null
 
   switch (name) {
@@ -171,6 +181,38 @@ export function handleCommand(text: string, chat_id: string): Handled | null {
         ].join('\n'),
       }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Command cards
+// ---------------------------------------------------------------------------
+
+/** Commands offered by a card, so a button can carry a position, not a name. */
+let cardOrder: Command[] = []
+
+function commandCard(sluggedName: string): Handled | null {
+  const all = listCommands()
+  const cmd = all.find((c) => slug(c.name) === sluggedName)
+  if (!cmd) return null
+
+  cardOrder = all
+  const index = all.indexOf(cmd)
+
+  const body = [`*/${cmd.name}*`, '', cmd.description || '_no description_', '', `_from: ${cmd.source}_`]
+  return {
+    text: body.join('\n'),
+    keyboard: new InlineKeyboard().text('▶ Run', `run:${index}`).text('✕', 'run:cancel'),
+  }
+}
+
+/**
+ * Resolve a run button back to the command it stands for. Returns null for the
+ * cancel button, or when the list has moved on since the card was drawn.
+ */
+export function resolveRun(payload: string): string | null {
+  if (payload === 'cancel') return null
+  const cmd = cardOrder[Number(payload)]
+  return cmd ? `/${cmd.name}` : null
 }
 
 // ---------------------------------------------------------------------------

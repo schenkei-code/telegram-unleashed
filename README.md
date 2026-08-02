@@ -157,6 +157,11 @@ so `claude-mem:mem-search` is registered as `claude_mem_mem_search` and
 translated back on the way in; without that the menu would offer commands that
 silently do nothing.
 
+A tapped entry is a bare word with no room for context, so it opens a card with
+the skill's full description and a run button rather than firing immediately —
+the menu blurb is one clipped line, which is not enough to decide on. Typing a
+command *with* arguments skips the card and goes straight through.
+
 A few are answered by the plugin itself, no session required: `/plugins` lists
 what is installed with a tick beside each one — tap to turn it on or off —
 while `/mcp`, `/commands`, `/history` and `/status` answer questions about the
