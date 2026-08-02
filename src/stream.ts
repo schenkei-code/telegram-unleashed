@@ -46,7 +46,10 @@ export function startTyping(api: Api, chat_id: string, action: 'typing' | 'uploa
   const t = setInterval(() => {
     const until = deadlines.get(chat_id) ?? 0
     if (Date.now() > until) {
-      stopTyping(chat_id)
+      // Only the indicator gives up here. A turn that outlives the keepalive
+      // is still running, and settling the status line into "Done" would say
+      // the opposite of the truth.
+      clearTypingTimer(chat_id)
       return
     }
     void api.sendChatAction(chat_id, action).catch(() => {})
@@ -58,10 +61,15 @@ export function startTyping(api: Api, chat_id: string, action: 'typing' | 'uploa
 
 /**
  * Stop the indicator. Called as soon as real output goes out — which is also
- * exactly when the status message has served its purpose, so it goes with it.
+ * the moment the status line has said what it was there to say, so it closes
+ * with it.
  */
 export function stopTyping(chat_id: string): void {
   stopHeartbeat(chat_id)
+  clearTypingTimer(chat_id)
+}
+
+function clearTypingTimer(chat_id: string): void {
   const t = timers.get(chat_id)
   if (t) clearInterval(t)
   timers.delete(chat_id)

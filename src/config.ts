@@ -117,6 +117,16 @@ export type Access = {
   /** Seconds between frames. Telegram rate-limits edits, so don't go below ~3. Default 4. */
   heartbeatIntervalSec?: number
   /**
+   * Leave the status line in the chat when the turn ends, rewritten to a
+   * past-tense word and the final duration. That closing line is how the
+   * sender knows the turn is over rather than merely quiet. Default true;
+   * set false to delete the line instead. */
+  heartbeatKeep?: boolean
+  /** Past-tense words for the closing line. */
+  heartbeatDoneWords?: string[]
+  /** Marker in front of the closing line. Default '✳'. */
+  heartbeatDoneFrame?: string
+  /**
    * Default rendering mode for reply/edit when the caller omits `format`.
    * 'auto' converts common Markdown to Telegram HTML and escapes everything
    * else — the safe default, no caller-side escaping needed.
@@ -156,6 +166,7 @@ export type Access = {
 
 const HEARTBEAT_WORDS = ['Pondering', 'Twisting', 'Musing', 'Digging', 'Untangling', 'Brewing']
 const HEARTBEAT_FRAMES = ['🤔', '💭', '🧠', '💭']
+const HEARTBEAT_DONE_WORDS = ['Done', 'Finished', 'Wrapped up']
 
 export function defaultAccess(): Access {
   return { dmPolicy: 'pairing', allowFrom: [], groups: {}, pending: {} }
@@ -216,6 +227,9 @@ export function prefs(a: Access = loadAccess()) {
     heartbeatFrames: a.heartbeatFrames?.length ? a.heartbeatFrames : HEARTBEAT_FRAMES,
     heartbeatTips: a.heartbeatTips ?? [],
     heartbeatIntervalSec: Math.max(3, a.heartbeatIntervalSec ?? 4),
+    heartbeatKeep: a.heartbeatKeep ?? true,
+    heartbeatDoneWords: a.heartbeatDoneWords?.length ? a.heartbeatDoneWords : HEARTBEAT_DONE_WORDS,
+    heartbeatDoneFrame: a.heartbeatDoneFrame ?? '✳',
     defaultFormat: a.defaultFormat ?? 'auto',
     streaming: a.streaming ?? true,
     streamIntervalMs: Math.max(400, a.streamIntervalMs ?? 1200),

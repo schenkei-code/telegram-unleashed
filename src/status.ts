@@ -31,6 +31,8 @@ type Beat = {
   startedAt: number
   /** Chosen once per turn — a tip that changes every frame is unreadable. */
   tip?: string
+  /** The past-tense word the line settles on when the turn is done. */
+  doneWord: string
   messageId?: number
   timer?: ReturnType<typeof setInterval>
   /** Set when the beat is cleared before its send resolved. */
@@ -62,6 +64,7 @@ export function startHeartbeat(api: Api, chat_id: string): void {
     tip: p.heartbeatTips.length
       ? p.heartbeatTips[Math.floor(Math.random() * p.heartbeatTips.length)]
       : undefined,
+    doneWord: p.heartbeatDoneWords[Math.floor(Math.random() * p.heartbeatDoneWords.length)] ?? 'Done',
     cancelled: false,
   }
   beats.set(chat_id, beat)
@@ -71,7 +74,8 @@ export function startHeartbeat(api: Api, chat_id: string): void {
     .then((sent) => {
       // The turn may have finished while this was in flight.
       if (beat.cancelled) {
-        void api.deleteMessage(chat_id, sent.message_id).catch(() => {})
+        beat.messageId = sent.message_id
+        settle(chat_id, beat)
         return
       }
       beat.messageId = sent.message_id
@@ -85,8 +89,10 @@ export function startHeartbeat(api: Api, chat_id: string): void {
 }
 
 /**
- * Remove the status line. Called wherever real output goes out, so the agent
- * never has to think about it.
+ * Called wherever real output goes out, so the agent never has to think about
+ * it. The line does not vanish — it settles into a past-tense word and the
+ * final duration, which is what tells the sender the turn is actually over
+ * rather than merely quiet. Set heartbeatKeep false to delete it instead.
  */
 export function stopHeartbeat(chat_id: string): void {
   const beat = beats.get(chat_id)
@@ -94,9 +100,21 @@ export function stopHeartbeat(chat_id: string): void {
   beats.delete(chat_id)
   beat.cancelled = true
   if (beat.timer) clearInterval(beat.timer)
-  if (beat.messageId != null) {
+  settle(chat_id, beat)
+}
+
+function settle(chat_id: string, beat: Beat): void {
+  if (beat.messageId == null) return
+  if (!prefs().heartbeatKeep) {
     void beat.api.deleteMessage(chat_id, beat.messageId).catch(() => {})
+    return
   }
+  void beat.api
+    .editMessageText(chat_id, beat.messageId, renderDone(beat), {
+      parse_mode: 'HTML',
+      link_preview_options: { is_disabled: true },
+    })
+    .catch(() => {})
 }
 
 export function stopAllHeartbeats(): void {
@@ -138,6 +156,15 @@ function render(beat: Beat): string {
   const secs = Math.floor((Date.now() - beat.startedAt) / 1000)
   const line = `${emoji} ${markdownToHtml(`_${word}…_`)} · ${elapsed(secs)}`.trim()
   return beat.tip ? `${line}\n\n${markdownToHtml(`_Tip: ${beat.tip}_`)}` : line
+}
+
+/**
+ * The finished line. No tip and no ellipsis — the point of it is that nothing
+ * is still in flight.
+ */
+function renderDone(beat: Beat): string {
+  const secs = Math.floor((Date.now() - beat.startedAt) / 1000)
+  return `${prefs().heartbeatDoneFrame} ${markdownToHtml(`_${beat.doneWord}_`)} · ${elapsed(secs)}`.trim()
 }
 
 function elapsed(secs: number): string {
