@@ -53,6 +53,13 @@ On Windows that path is `%USERPROFILE%\.claude\channels\telegram\.env`.
 
 The marketplace is named `hunch`, hence the `@hunch` — not `@telegram-unleashed`.
 
+To pull a later version:
+
+```
+/plugin marketplace update hunch
+/plugin update telegram-unleashed@hunch
+```
+
 ### 5. Start Claude Code with the channel attached
 
 ```bash
@@ -142,6 +149,21 @@ can look up what it already promised instead of asking you to paste it back.
 `scripts/backfill-history.mjs` seeds the log from existing Claude Code
 transcripts, so switching it on does not start you at zero.
 
+**Your commands are in the menu.** The blue command button lists what Claude
+Code actually has installed — every skill and slash command, discovered at
+startup, so it stays right as you add and remove things. Tap one and the
+session runs it. Telegram refuses a command name with a dash or a colon in it,
+so `claude-mem:mem-search` is registered as `claude_mem_mem_search` and
+translated back on the way in; without that the menu would offer commands that
+silently do nothing.
+
+A few are answered by the plugin itself, no session required: `/plugins` lists
+what is installed with a tick beside each one — tap to turn it on or off —
+while `/mcp`, `/commands`, `/history` and `/status` answer questions about the
+machine. Toggling takes effect when Claude Code next starts. Access control is
+deliberately *not* reachable this way: who may talk to the bridge is decided at
+the machine, never by something that arrived over it.
+
 **Decisions are a tap.** `ask` posts a question with buttons and blocks until
 one is pressed. `send_plan` does the same for a plan, returning approve or
 reject. Permission requests keep the Allow/Deny buttons of the original, plus
@@ -163,6 +185,7 @@ an expandable detail view.
 | `send_poll` | Poll. |
 | `typing` | Manual indicator control (usually automatic). |
 | `download_attachment` | Fetch an inbound file into the inbox. |
+| `history` | Read or search what was said in a chat before. |
 | `channel_info` | Limits, streaming mode, pending waiters. |
 
 ## Configuration
@@ -209,6 +232,7 @@ API credentials come from https://my.telegram.org.
 | `linkPreview` | `false` | Show link previews |
 | `askTimeoutSec` | `900` | How long `ask`/`send_plan` wait |
 | `collapseOver` | `0` | Auto-collapse messages longer than N chars (0 = off) |
+| `history` | `true` | Keep a local log of every message in and out |
 
 ## Live activity feed
 

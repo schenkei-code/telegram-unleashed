@@ -17,6 +17,7 @@ import { InlineKeyboard } from 'grammy'
 import { randomBytes } from 'crypto'
 import { loadAccess, prefs } from './config.js'
 import { markdownToHtml, escapeHtml, collapse } from './format.js'
+import { togglePlugin } from './commands.js'
 
 type Api = Bot['api']
 
@@ -221,6 +222,21 @@ export function registerCallbacks(bot: Bot, emitPermission: PermissionEmitter): 
     }
 
     const who = ctx.from.username ? `@${ctx.from.username}` : senderId
+
+    // ---- plugin toggles ----
+    const pl = /^pl:(\d{1,3})$/.exec(data)
+    if (pl) {
+      const { view, note } = togglePlugin(Number(pl[1]))
+      await ctx.answerCallbackQuery({ text: note }).catch(() => {})
+      await ctx
+        .editMessageText(markdownToHtml(view.text), {
+          parse_mode: 'HTML',
+          link_preview_options: { is_disabled: true },
+          ...(view.keyboard ? { reply_markup: view.keyboard } : {}),
+        })
+        .catch(() => {})
+      return
+    }
 
     // ---- permissions ----
     const perm = /^perm:(allow|deny|more):([A-Za-z0-9_-]{1,32})$/.exec(data)

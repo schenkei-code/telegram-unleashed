@@ -25,8 +25,12 @@ const CHANNEL = process.env.TELEGRAM_CHANNEL ?? 'telegram'
 const STATE_DIR = process.env.TELEGRAM_STATE_DIR ?? join(homedir(), '.claude', 'channels', CHANNEL)
 const FEED_DIR = join(STATE_DIR, 'activity')
 
-/** Minimum ms between edits. Telegram tolerates ~1/s per chat. */
-const EDIT_INTERVAL_MS = 1500
+/**
+ * Minimum ms between edits. Telegram starts rate-limiting message edits around
+ * one per second; a rejected edit is harmless here because the next event
+ * carries the same text plus whatever arrived since.
+ */
+const EDIT_INTERVAL_MS = 900
 /** Telegram's cap is 4096; leave room for the header and the trailing marker. */
 const MAX_CHARS = 3600
 /** How long a finished card stays editable before the next turn opens a new one. */

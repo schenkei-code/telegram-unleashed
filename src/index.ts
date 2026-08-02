@@ -26,6 +26,7 @@ import {
   CHANNEL,
   ENV_FILE,
   INBOX_DIR,
+  MAX_CHUNK_LIMIT,
   PID_FILE,
   STATE_DIR,
   TOKEN,
@@ -47,6 +48,8 @@ import {
 } from './interactive.js'
 import { TOOL_DEFS, callTool } from './tools.js'
 import { record as recordHistory } from './history.js'
+import { handleCommand, resolveSlug, publishMenu, togglePlugin } from './commands.js'
+import { markdownToHtml, chunkHtml } from './format.js'
 
 if (!TOKEN) {
   process.stderr.write(
@@ -108,7 +111,7 @@ const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
 // ---------------------------------------------------------------------------
 
 const mcp = new Server(
-  { name: 'telegram-unleashed', version: '1.0.0' },
+  { name: 'telegram-unleashed', version: '1.1.0' },
   {
     capabilities: {
       tools: {},
@@ -332,6 +335,31 @@ async function handleInbound(
     return
   }
 
+  // Questions about the bridge itself are answered here — they need no session,
+  // and answering them locally means they still work while a turn is busy.
+  const native = handleCommand(text, chat_id)
+  if (native) {
+    recordHistory(chat_id, { ts: new Date().toISOString(), dir: 'in', from: from.username ?? String(from.id), text })
+    // A full command listing runs well past Telegram's 4096-character cap, so
+    // these go through the same chunker as ordinary replies. The keyboard, if
+    // any, belongs on the last part.
+    const parts = chunkHtml(markdownToHtml(native.text), MAX_CHUNK_LIMIT, 'newline')
+    for (let i = 0; i < parts.length; i++) {
+      await ctx
+        .reply(parts[i], {
+          parse_mode: 'HTML',
+          link_preview_options: { is_disabled: true },
+          ...(native.keyboard && i === parts.length - 1 ? { reply_markup: native.keyboard } : {}),
+        })
+        .catch(() => {})
+    }
+    return
+  }
+
+  // A tapped menu entry arrives under its Telegram-legal name; the session
+  // knows it by its real one.
+  text = resolveSlug(text)
+
   // Logged before the relay, so a message that never reaches a session is
   // still recoverable afterwards.
   recordHistory(chat_id, {
@@ -513,17 +541,11 @@ void (async () => {
           process.stderr.write(
             `telegram-unleashed: polling as @${info.username} (${CHANNEL}) — ${limitsSummary()}\n`,
           )
-          void bot.api
-            .setMyCommands(
-              [
-                { command: 'start', description: 'Kopplung einrichten' },
-                { command: 'help', description: 'Was dieser Bot kann' },
-                { command: 'status', description: 'Kopplungsstatus' },
-                { command: 'info', description: 'Limits und Kanalzustand' },
-              ],
-              { scope: { type: 'all_private_chats' } },
-            )
-            .catch(() => {})
+          // The menu is built from what is installed right now, so it stays
+          // accurate across plugin changes without anyone maintaining a list.
+          void publishMenu(bot)
+            .then(n => trace(`command menu published (${n} entries)`))
+            .catch(err => trace(`command menu failed: ${err}`))
         },
       })
       return // clean stop
