@@ -37,8 +37,12 @@ const FEED_DIR = join(STATE_DIR, 'activity')
 const EDIT_INTERVAL_MS = 900
 /** Telegram's cap is 4096; leave room for the block markup around the body. */
 const MAX_CHARS = 3600
-/** Steps a card holds before it is retired and a fresh one takes over. */
-const MAX_LINES = 8
+/**
+ * Steps a card holds before it is retired and a fresh one takes over. Each
+ * step is a bullet, its result and a blank line, so this is roughly three
+ * times as many lines on screen.
+ */
+const MAX_LINES = 6
 /** Result lines printed under a call, as the terminal truncates them too. */
 const RESULT_LINES = 2
 /** How long a finished card stays editable before the next turn opens a new one. */
@@ -404,10 +408,10 @@ function clip(s, n) {
 function render(st) {
   const parts = []
   for (const line of st.lines ?? []) {
-    // Prose opens a paragraph the way it does in the terminal; consecutive
-    // tool calls stay packed, because a phone screen is not a terminal.
+    // A blank line between every step, as the terminal does it. Packed tight
+    // the bullets read as one paragraph and the eye finds no step boundaries.
+    if (parts.length) parts.push('')
     if (line.kind === 'text') {
-      if (parts.length) parts.push('')
       parts.push(`● ${line.text}`)
       continue
     }
