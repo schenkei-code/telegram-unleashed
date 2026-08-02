@@ -9,7 +9,7 @@
  *     approved/     pairing handoff from the access skill
  */
 
-import { readFileSync, writeFileSync, mkdirSync, renameSync, chmodSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, renameSync, chmodSync, appendFileSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 
@@ -23,6 +23,22 @@ export const APPROVED_DIR = join(STATE_DIR, 'approved')
 export const ENV_FILE = join(STATE_DIR, '.env')
 export const INBOX_DIR = join(STATE_DIR, 'inbox')
 export const PID_FILE = join(STATE_DIR, 'bot.pid')
+export const TRACE_FILE = join(STATE_DIR, 'trace.log')
+
+/**
+ * One line in the bridge's own log. Lives here rather than in the server so
+ * background work — the status line, the typing indicator — can record why it
+ * gave up. A caught-and-dropped failure in something nobody is awaiting is
+ * invisible from the outside and looks exactly like a feature that was never
+ * built.
+ */
+export function trace(line: string): void {
+  try {
+    appendFileSync(TRACE_FILE, `${new Date().toISOString()} [${process.pid}] ${line}\n`)
+  } catch {
+    // Diagnostics must never break the bridge.
+  }
+}
 
 // Plugin-spawned MCP servers get no env block — the token is loaded from disk.
 // Real environment wins so CI/overrides still work.

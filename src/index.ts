@@ -18,8 +18,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { Bot, GrammyError, type Context } from 'grammy'
-import { readFileSync, writeFileSync, appendFileSync, mkdirSync, rmSync } from 'fs'
-import { join } from 'path'
+import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'fs'
 
 import {
   API_ROOT,
@@ -32,6 +31,7 @@ import {
   TOKEN,
   loadAccess,
   prefs,
+  trace,
 } from './config.js'
 import {
   dmCommandGate,
@@ -85,16 +85,6 @@ const bot = new Bot(TOKEN, {
 // a record of each step the three are indistinguishable from the outside.
 // ---------------------------------------------------------------------------
 
-const TRACE_FILE = join(STATE_DIR, 'trace.log')
-
-function trace(line: string): void {
-  try {
-    appendFileSync(TRACE_FILE, `${new Date().toISOString()} [${process.pid}] ${line}\n`)
-  } catch {
-    // Diagnostics must never break the bridge.
-  }
-}
-
 trace(`process start — channel=${CHANNEL} api=${API_ROOT}`)
 
 bot.use(async (ctx, next) => {
@@ -112,7 +102,7 @@ const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
 // ---------------------------------------------------------------------------
 
 const mcp = new Server(
-  { name: 'telegram-unleashed', version: '1.1.0' },
+  { name: 'telegram-unleashed', version: '1.2.0' },
   {
     capabilities: {
       tools: {},

@@ -15,7 +15,7 @@
  */
 
 import type { Bot } from 'grammy'
-import { prefs } from './config.js'
+import { prefs, trace } from './config.js'
 import { markdownToHtml } from './format.js'
 
 type Api = Bot['api']
@@ -101,7 +101,8 @@ export function startHeartbeat(api: Api, chat_id: string): void {
       if (typeof t.unref === 'function') t.unref()
       beat.timer = t
     })
-    .catch(() => {
+    .catch((err) => {
+      trace(`heartbeat post failed chat=${beat.target}: ${err?.description ?? err}`)
       beats.delete(chat_id)
     })
 }
@@ -122,7 +123,12 @@ export function stopHeartbeat(chat_id: string): void {
 }
 
 function settle(beat: Beat): void {
-  if (beat.messageId == null) return
+  // The line was never posted — either the send is still in flight, in which
+  // case it settles itself on arrival, or it failed. Both are worth knowing.
+  if (beat.messageId == null) {
+    trace(`heartbeat settle skipped — no message yet (target=${beat.target})`)
+    return
+  }
   if (!prefs().heartbeatKeep) {
     void beat.api.deleteMessage(beat.target, beat.messageId).catch(() => {})
     return
@@ -132,7 +138,9 @@ function settle(beat: Beat): void {
       parse_mode: 'HTML',
       link_preview_options: { is_disabled: true },
     })
-    .catch(() => {})
+    // Nobody awaits this, so a rejection here is what "the closing line never
+    // appeared" looks like from the chat. Silence would leave it unexplained.
+    .catch((err) => trace(`heartbeat settle failed msg=${beat.messageId}: ${err?.description ?? err}`))
 }
 
 export function stopAllHeartbeats(): void {
