@@ -18,14 +18,72 @@ and decisions you settle with a thumb.
 *Built by **hunch intentional agent**. A fork of the official `telegram`
 plugin, whose access-control model is carried over unchanged.*
 
-## Install
+## Quick start
+
+Six steps, about five minutes. Step 5 is the one everybody misses.
+
+### 1. Requirements
+
+[Claude Code](https://claude.com/claude-code), and [bun](https://bun.sh) — the
+server runs TypeScript directly, there is no build step. Node 20+ only if you
+want the optional activity feed.
+
+### 2. Create a bot
+
+Message [@BotFather](https://t.me/botfather), send `/newbot`, follow the two
+questions. You get a token that looks like `123456789:AAH...`.
+
+### 3. Store the token
+
+The token lives outside the plugin so upgrades never lose it:
+
+```bash
+mkdir -p ~/.claude/channels/telegram
+echo 'TELEGRAM_BOT_TOKEN=123456789:AAH...' > ~/.claude/channels/telegram/.env
+```
+
+On Windows that path is `%USERPROFILE%\.claude\channels\telegram\.env`.
+
+### 4. Install the plugin
 
 ```
 /plugin marketplace add schenkei-code/telegram-unleashed
-/plugin install telegram-unleashed@telegram-unleashed
+/plugin install telegram-unleashed@hunch
 ```
 
-Then set up the bot — see [Setup](#setup) — and restart Claude Code.
+The marketplace is named `hunch`, hence the `@hunch` — not `@telegram-unleashed`.
+
+### 5. Start Claude Code with the channel attached
+
+```bash
+claude --channels plugin:telegram-unleashed@hunch --dangerously-load-development-channels
+```
+
+**This is the step that silently costs people an afternoon.** Installing the
+plugin loads its tools, so sending *out* works immediately and everything looks
+fine — but inbound messages are only routed to a session that asked for them.
+Without `--channels` you can message the bot all day and nothing arrives.
+
+The syntax is strict and undocumented: entries must be tagged, either
+`plugin:<name>@<marketplace>` or `server:<name>`. A bare `telegram-unleashed`
+is rejected with *entries must be tagged*. The second flag is needed because
+this plugin is not on Anthropic's built-in channel allowlist; without it the
+entry is refused as a development channel.
+
+### 6. Pair
+
+DM your bot. It answers with a pairing code. Back in Claude Code:
+
+```
+/telegram-unleashed:access pair <code>
+```
+
+That writes your user id to the allowlist. Now message the bot and the session
+answers.
+
+> Only one process may poll a given bot token. Running this alongside the
+> official `telegram` plugin on the same token produces a permanent 409 —
+> disable one, or give each its own bot.
 
 ## What it does differently
 
@@ -98,21 +156,11 @@ an expandable detail view.
 | `download_attachment` | Fetch an inbound file into the inbox. |
 | `channel_info` | Limits, streaming mode, pending waiters. |
 
-## Setup
+## Configuration
 
-1. Create a bot with [@BotFather](https://t.me/botfather), then:
-
-   ```
-   ~/.claude/channels/telegram/.env
-   TELEGRAM_BOT_TOKEN=123456789:AAH...
-   ```
-
-2. Enable the plugin, restart Claude Code, DM the bot, and pair with the code
-   it returns via `/telegram-unleashed:access pair <code>`.
-
-Only one process may poll a given bot token. Running this alongside the
-official `telegram` plugin on the same token produces a permanent 409 —
-disable one, or give each its own bot.
+State lives in `~/.claude/channels/<channel>/` — credentials, allowlist,
+downloaded attachments — so reinstalling or upgrading the plugin never touches
+it.
 
 ### Environment
 
