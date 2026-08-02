@@ -116,7 +116,7 @@ type StreamState = {
   messageId?: number
   lastPush: number
   lastPushed: string
-  mode: 'draft' | 'edit'
+  mode: 'draft' | 'edit' | 'buffer'
   reply_to?: number
   silent?: boolean
   closed: boolean
@@ -131,7 +131,7 @@ export async function openStream(
   api: Api,
   chat_id: string,
   opts: { reply_to?: number; initial?: string; silent?: boolean } = {},
-): Promise<{ stream_id: string; mode: 'draft' | 'edit'; message_id?: number }> {
+): Promise<{ stream_id: string; mode: 'draft' | 'edit' | 'buffer'; message_id?: number }> {
   const stream_id = `s${++draftSeq}`
   const st: StreamState = {
     chat_id,
@@ -145,9 +145,13 @@ export async function openStream(
     closed: false,
   }
 
-  // Drafts are private-chat only. A negative id is a group/channel.
+  // Drafts are private-chat only. A negative id is a group/channel — and a
+  // group has no business watching an answer being written: half-formed text,
+  // edited a dozen times, notifies and re-notifies everyone in the room. There
+  // the stream buffers silently and lands as one finished message.
   const isPrivate = !chat_id.startsWith('-')
-  if (!isPrivate || draftsAvailable === false) st.mode = 'edit'
+  if (!isPrivate) st.mode = 'buffer'
+  else if (draftsAvailable === false) st.mode = 'edit'
 
   streams.set(stream_id, st)
 
@@ -166,6 +170,9 @@ export async function pushStream(api: Api, stream_id: string, delta: string): Pr
   const st = streams.get(stream_id)
   if (!st || st.closed) throw new Error(`unknown or closed stream: ${stream_id}`)
   st.text += delta
+
+  // Nothing to show mid-flight in a group; the text is kept and sent at the end.
+  if (st.mode === 'buffer') return
 
   const p = prefs()
   const now = Date.now()
@@ -279,6 +286,10 @@ export async function typeOut(
   const { stream_id } = await openStream(api, chat_id, { reply_to: opts.reply_to, silent: opts.silent })
   const st = streams.get(stream_id)
   if (!st) return []
+
+  // In a group the reveal is skipped outright rather than played out slowly:
+  // the point of typing something out is that one person is watching it happen.
+  if (st.mode === 'buffer') return closeStream(api, stream_id, text)
 
   const words = tokenize(text, opts.unit ?? 'natural')
   // Drafts tolerate this comfortably — the 429s seen while tuning came from

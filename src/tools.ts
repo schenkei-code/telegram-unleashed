@@ -140,7 +140,7 @@ export const TOOL_DEFS = [
   {
     name: 'stream_start',
     description:
-      'Begin a live message that updates as you write. The user watches the answer appear instead of waiting on a typing indicator. Returns a stream_id — feed it with stream_push and finish with stream_end. Use for answers that take a while to produce.',
+      'Begin a live message that updates as you write. The user watches the answer appear instead of waiting on a typing indicator. Returns a stream_id — feed it with stream_push and finish with stream_end. Use for answers that take a while to produce. In a group the stream buffers instead and arrives as one finished message on stream_end, so the same code works in both places.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -170,7 +170,7 @@ export const TOOL_DEFS = [
   {
     name: 'say',
     description:
-      'Send a message that types itself out in front of the user. Unlike stream_push, the pacing happens inside the plugin — one call reveals the whole text smoothly instead of one round-trip per chunk. Use when the text is already written and you want it to arrive alive rather than all at once.',
+      'Send a message that types itself out in front of the user. Unlike stream_push, the pacing happens inside the plugin — one call reveals the whole text smoothly instead of one round-trip per chunk. Use when the text is already written and you want it to arrive alive rather than all at once. In a group it posts whole instead: a reveal is for one person watching, not an audience.',
     inputSchema: {
       type: 'object',
       properties: {
