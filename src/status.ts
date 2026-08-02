@@ -22,7 +22,7 @@ import type { Bot } from 'grammy'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { prefs, trace, STATE_DIR } from './config.js'
-import { markdownToHtml } from './format.js'
+import { escapeHtml } from './format.js'
 
 type Api = Bot['api']
 
@@ -197,8 +197,17 @@ function render(beat: Beat): string {
   // Elapsed time is what turns a status line into a heartbeat: a frozen clock
   // reads as a hung turn even while the emoji keeps moving.
   const secs = Math.floor((Date.now() - beat.startedAt) / 1000)
-  const line = `${emoji} ${markdownToHtml(`_${word}…_`)} (${elapsed(secs)}${tokens(beat)})${where(beat)}`
-  return beat.tip ? `${line}\n  ⎿  ${markdownToHtml(`_Tip: ${beat.tip}_`)}` : line
+  const line = `${emoji} ${word}… (${elapsed(secs)}${tokens(beat)})${where(beat)}`
+  return block(beat.tip ? `${line}\n  ⎿  Tip: ${beat.tip}` : line)
+}
+
+/**
+ * The line as the terminal draws it: a fixed-width block, no italics, the tip
+ * hanging off the corner marker. Monospace is not decoration here — it is what
+ * keeps the marker under the word it belongs to while the clock changes width.
+ */
+function block(text: string): string {
+  return `<pre>${escapeHtml(text)}</pre>`
 }
 
 /**
@@ -222,7 +231,7 @@ function tokens(beat: Beat): string {
 /** Names the group a redirected line belongs to; empty when it is in place. */
 function where(beat: Beat): string {
   if (!beat.origin) return ''
-  return ` · ${markdownToHtml(`_in ${titles.get(beat.origin) ?? 'a group'}_`)}`
+  return ` · in ${titles.get(beat.origin) ?? 'a group'}`
 }
 
 const titles = new Map<string, string>()
@@ -244,7 +253,7 @@ async function groupTitle(api: Api, chat_id: string): Promise<void> {
  */
 function renderDone(beat: Beat): string {
   const secs = Math.floor((Date.now() - beat.startedAt) / 1000)
-  return `${prefs().heartbeatDoneFrame} ${markdownToHtml(`_${beat.doneWord}_`)} (${elapsed(secs)}${tokens(beat)})${where(beat)}`
+  return block(`${prefs().heartbeatDoneFrame} ${beat.doneWord} (${elapsed(secs)}${tokens(beat)})${where(beat)}`)
 }
 
 function elapsed(secs: number): string {
