@@ -25,8 +25,20 @@ import {
 } from './stream.js'
 import type { TypeUnit } from './stream.js'
 import { ask, sendPlan, pendingCounts } from './interactive.js'
+import { record, read as readHistory, chats as historyChats, format as formatHistory } from './history.js'
 
 type Api = Bot['api']
+
+/** Log an outbound message so the agent can look up what it already said. */
+function logOut(chat_id: string, text: string, id?: number): void {
+  if (!text.trim()) return
+  record(chat_id, {
+    ts: new Date().toISOString(),
+    dir: 'out',
+    ...(id != null ? { id: String(id) } : {}),
+    text,
+  })
+}
 
 const str = (v: unknown): string => String(v ?? '')
 const num = (v: unknown): number | undefined => (v == null ? undefined : Number(v))
@@ -123,6 +135,22 @@ export const TOOL_DEFS = [
         reply_to: { type: 'string' },
       },
       required: ['chat_id'],
+    },
+  },
+  {
+    name: 'history',
+    description:
+      'Read what was said in this chat before. Telegram exposes no history to a bot, so the plugin keeps its own log of every message in and out — use this instead of asking the user to paste earlier context. Omit chat_id to list the chats that have a history.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        chat_id: { type: 'string', description: 'Omit to list chats instead of reading one.' },
+        limit: { type: 'number', description: 'How many messages, newest last. Default 50, 0 for all.' },
+        search: {
+          type: 'string',
+          description: 'Only messages containing this text, case-insensitive. Applied before limit, so it reaches past the tail.',
+        },
+      },
     },
   },
   {
@@ -331,7 +359,10 @@ export async function callTool(
           silent: bool(args.silent),
         })
         stopTyping(chat_id)
-        if (ids.length) return `sent (id: ${ids[0]})`
+        if (ids.length) {
+          logOut(chat_id, raw, ids[0])
+          return `sent (id: ${ids[0]})`
+        }
         // The reveal committed nothing — fall through to the plain send rather
         // than losing the message.
       }
@@ -365,6 +396,7 @@ export async function callTool(
 
       stopTyping(chat_id)
       if (!ids.length) throw new Error('nothing to send — text was empty and no files were given')
+      logOut(chat_id, files.length ? `${raw} [${files.length} file(s)]`.trim() : raw, ids[0])
       return ids.length === 1 ? `sent (id: ${ids[0]})` : `sent ${ids.length} parts (ids: ${ids.join(', ')})`
     }
 
@@ -424,6 +456,23 @@ export async function callTool(
       return `stream_id: ${s.stream_id} (mode: ${s.mode})`
     }
 
+    case 'history': {
+      if (args.chat_id == null) {
+        const list = historyChats()
+        if (!list.length) return 'no history yet'
+        return list
+          .map((c) => `${c.chat_id} — ${c.messages} messages${c.last ? `, last ${c.last.slice(0, 19).replace('T', ' ')}` : ''}`)
+          .join('\n')
+      }
+      const chat_id = str(args.chat_id)
+      assertAllowedChat(chat_id)
+      const entries = readHistory(chat_id, {
+        limit: args.limit == null ? undefined : Number(args.limit),
+        search: args.search ? str(args.search) : undefined,
+      })
+      return formatHistory(entries)
+    }
+
     case 'say': {
       const chat_id = str(args.chat_id)
       assertAllowedChat(chat_id)
@@ -434,6 +483,7 @@ export async function callTool(
         tickMs: num(args.tick_ms),
         maxMs: num(args.max_ms),
       })
+      logOut(chat_id, str(args.text), ids[0])
       return ids.length ? `sent (ids: ${ids.join(', ')})` : 'sent'
     }
 

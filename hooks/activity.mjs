@@ -236,7 +236,9 @@ function toolLine(name, input) {
       return { kind: 'tool', text: `edit ${file(input.notebook_path)}` }
     case 'Bash':
     case 'PowerShell':
-      return { kind: 'tool', text: clip(input.description || input.command || short, 90) }
+      // The command itself, not the description — a paraphrase of a shell
+      // command is strictly less information than the command.
+      return { kind: 'tool', text: clip(input.command || input.description || short, 160) }
     case 'Grep':
       return { kind: 'tool', text: `grep "${clip(input.pattern ?? '', 50)}"` }
     case 'Glob':

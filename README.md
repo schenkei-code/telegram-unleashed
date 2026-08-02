@@ -133,6 +133,15 @@ album instead of eight separate messages. Against Telegram's cloud the upload
 ceiling is 50 MB; point `TELEGRAM_API_ROOT` at a local Bot API server and it
 becomes 2 GB with unlimited downloads.
 
+**The conversation is remembered.** Telegram hands a bot nothing but the
+updates it is online for — there is no API to fetch what was said earlier, and
+`getUpdates` forgets within a day. So the plugin keeps its own log: every
+message in and out, JSONL, one file per chat, next to the channel's other
+state. The `history` tool reads and searches it, which means a restarted agent
+can look up what it already promised instead of asking you to paste it back.
+`scripts/backfill-history.mjs` seeds the log from existing Claude Code
+transcripts, so switching it on does not start you at zero.
+
 **Decisions are a tap.** `ask` posts a question with buttons and blocks until
 one is pressed. `send_plan` does the same for a plan, returning approve or
 reject. Permission requests keep the Allow/Deny buttons of the original, plus

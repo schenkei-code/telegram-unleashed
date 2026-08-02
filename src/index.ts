@@ -46,6 +46,7 @@ import {
   registerCallbacks,
 } from './interactive.js'
 import { TOOL_DEFS, callTool } from './tools.js'
+import { record as recordHistory } from './history.js'
 
 if (!TOKEN) {
   process.stderr.write(
@@ -330,6 +331,16 @@ async function handleInbound(
     }
     return
   }
+
+  // Logged before the relay, so a message that never reaches a session is
+  // still recoverable afterwards.
+  recordHistory(chat_id, {
+    ts: new Date((ctx.message?.date ?? 0) * 1000 || Date.now()).toISOString(),
+    dir: 'in',
+    ...(msgId != null ? { id: String(msgId) } : {}),
+    from: from.username ?? String(from.id),
+    text,
+  })
 
   // Keep the indicator alive for the whole turn, not just five seconds.
   startTyping(bot.api, chat_id)

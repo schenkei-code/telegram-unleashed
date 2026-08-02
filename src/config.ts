@@ -128,6 +128,11 @@ export type Access = {
   askTimeoutSec?: number
   /** Collapse outbound text longer than this into an expandable quote. 0 = off. Default 0. */
   collapseOver?: number
+  /**
+   * Keep a local log of every message in and out, so the agent can look up what
+   * was already said. Telegram itself exposes no history. Default true.
+   */
+  history?: boolean
 }
 
 export function defaultAccess(): Access {
