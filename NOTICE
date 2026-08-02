@@ -1,0 +1,22 @@
+telegram-unleashed
+Copyright 2026 Dominik Schenkel (hunch intentional agent)
+
+This product includes software derived from the `telegram` plugin published in
+Anthropic's official Claude Code plugin marketplace, which is licensed under the
+Apache License, Version 2.0.
+
+Changes from the original:
+
+  - the activity indicator is kept alive past Telegram's five-second expiry
+  - replies are revealed word by word rather than posted whole
+  - live streaming via sendRichMessageDraft, with an edit-based fallback
+  - Markdown is converted and escaped for the caller; chunking is HTML-aware
+  - files are sent in their proper form, albums included, up to 2 GB against a
+    local Bot API server
+  - questions and plans are answered with buttons and block until answered
+  - a local conversation history, since the Bot API exposes none
+  - a command menu built from the installed skills, plugins and MCP servers,
+    with plugin toggles
+  - an optional hook that mirrors a running session into one live message
+
+The access-control model of the original is carried over unchanged in behaviour.

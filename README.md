@@ -285,6 +285,17 @@ The end-to-end test spawns the server over stdio exactly as Claude Code does,
 verifies the guard rails reject a non-allowlisted chat and refuse to attach
 channel state, and sends real messages.
 
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).
+
+MIT was the intent, but it is not available here: this is a fork of Anthropic's
+official `telegram` plugin, which is Apache-2.0, and that licence cannot be
+relicensed away. Apache-2.0 grants the same permissions to you — use, modify,
+redistribute, commercial use included — and additionally comes with an express
+patent grant. What it asks in return is that the notice travels with the code
+and that changes are stated, which `NOTICE` does.
+
 ---
 
 <div align="center">
