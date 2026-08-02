@@ -30,11 +30,14 @@ const STATE_DIR = process.env.TELEGRAM_STATE_DIR ?? join(homedir(), '.claude', '
 const FEED_DIR = join(STATE_DIR, 'activity')
 
 /**
- * Minimum ms between edits. Telegram starts rate-limiting message edits around
- * one per second; a rejected edit is harmless here because the next event
- * carries the same text plus whatever arrived since.
+ * Minimum ms between edits. Telegram rate-limits a chat to roughly one message
+ * a second and the status line is editing from the same budget — the clock on
+ * it should tick smoothly, and a tool call showing up half a second later does
+ * not. So the card yields: it spends less of the allowance than the line does.
+ * A rejected edit is harmless either way, the next event carries the same text
+ * plus whatever arrived since.
  */
-const EDIT_INTERVAL_MS = 900
+const EDIT_INTERVAL_MS = 1800
 /** Telegram's cap is 4096; leave room for the block markup around the body. */
 const MAX_CHARS = 3600
 /**
