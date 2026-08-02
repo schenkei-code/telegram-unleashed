@@ -15,7 +15,16 @@
 
 import type { Bot } from 'grammy'
 import { InlineKeyboard } from 'grammy'
-import { listCommands, listPlugins, listMcp, setPlugin, type Plugin, type Command } from './control.js'
+import {
+  listCommands,
+  listPlugins,
+  listMcp,
+  setPlugin,
+  runCli,
+  CLI_COMMANDS,
+  type Plugin,
+  type Command,
+} from './control.js'
 import { read as readHistory, format as formatHistory } from './history.js'
 import { draftSupport } from './stream.js'
 import { CHANNEL } from './config.js'
@@ -39,7 +48,7 @@ const NATIVE: { name: string; description: string }[] = [
   { name: 'help', description: 'What this bridge can do' },
 ]
 
-const nativeNames = new Set(NATIVE.map((c) => c.name))
+const nativeNames = new Set([...NATIVE.map((c) => c.name), ...Object.keys(CLI_COMMANDS)])
 
 /**
  * Publish the menu. Telegram caps it at 100 entries, so the native commands go
@@ -47,7 +56,10 @@ const nativeNames = new Set(NATIVE.map((c) => c.name))
  */
 export async function publishMenu(bot: Bot, scope: { type: 'all_private_chats' } | undefined = { type: 'all_private_chats' }): Promise<number> {
   const seen = new Set(nativeNames)
-  const entries = NATIVE.map((c) => ({ command: c.name, description: c.description }))
+  const entries = [
+    ...NATIVE.map((c) => ({ command: c.name, description: c.description })),
+    ...Object.entries(CLI_COMMANDS).map(([name, c]) => ({ command: name, description: c.description })),
+  ]
 
   for (const c of listCommands()) {
     if (entries.length >= 100) break
@@ -72,7 +84,7 @@ export async function publishMenu(bot: Bot, scope: { type: 'all_private_chats' }
         const max = [60, 40, 24][attempt]
         for (const e of entries) e.description = e.description.slice(0, max)
       } else {
-        entries.length = Math.max(NATIVE.length, Math.floor(entries.length / 2))
+        entries.length = Math.max(NATIVE.length + Object.keys(CLI_COMMANDS).length, Math.floor(entries.length / 2))
       }
     }
   }
@@ -111,10 +123,15 @@ export type Handled = { text: string; keyboard?: InlineKeyboard }
  * Answer a native command, or return null to let the message through to the
  * session unchanged.
  */
-export function handleCommand(text: string, chat_id: string): Handled | null {
+export async function handleCommand(text: string, chat_id: string): Promise<Handled | null> {
   const m = /^\/([a-z0-9_]{1,32})(?:@\w+)?(?:\s+([\s\S]*))?$/.exec(text.trim())
   if (!m) return null
   const [, name, arg = ''] = m
+
+  // Built-ins that also exist as CLI subcommands run for real.
+  if (name in CLI_COMMANDS) {
+    return { text: `*/${name}*\n\n\`\`\`\n${await runCli(name)}\n\`\`\`` }
+  }
 
   // A tapped menu entry is a bare word with no context — the blurb Telegram
   // shows is clipped to a line, and there is no way to pass an argument. So a

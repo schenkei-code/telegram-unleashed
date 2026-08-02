@@ -14,9 +14,11 @@
 import { readFileSync, writeFileSync, readdirSync, existsSync, renameSync } from 'fs'
 import { homedir } from 'os'
 import { join, basename } from 'path'
+import { spawn } from 'child_process'
 
 const CLAUDE_DIR = join(homedir(), '.claude')
 const SETTINGS = join(CLAUDE_DIR, 'settings.json')
+const LOCAL_SETTINGS = join(CLAUDE_DIR, 'settings.local.json')
 const INSTALLED = join(CLAUDE_DIR, 'plugins', 'installed_plugins.json')
 const USER_CONFIG = join(homedir(), '.claude.json')
 
@@ -25,6 +27,20 @@ function readJson<T>(path: string): T | null {
     return JSON.parse(readFileSync(path, 'utf8')) as T
   } catch {
     return null
+  }
+}
+
+type Settings = { enabledPlugins?: Record<string, unknown> }
+
+/**
+ * What is actually in force. settings.local.json overrides settings.json, and
+ * reading only the latter reports plugins as on that the local file has turned
+ * off — a listing that lies is worse than none.
+ */
+function effectivePlugins(): Record<string, unknown> {
+  return {
+    ...(readJson<Settings>(SETTINGS)?.enabledPlugins ?? {}),
+    ...(readJson<Settings>(LOCAL_SETTINGS)?.enabledPlugins ?? {}),
   }
 }
 
@@ -89,7 +105,7 @@ export function listCommands(): Command[] {
 
   // Plugin-provided skills, but only from plugins that are actually on.
   const enabled = new Set(
-    Object.entries(readJson<Record<string, unknown>>(SETTINGS)?.enabledPlugins ?? {})
+    Object.entries(effectivePlugins())
       .filter(([, v]) => v !== false)
       .map(([k]) => k),
   )
@@ -117,18 +133,15 @@ export function listCommands(): Command[] {
 export type Plugin = { id: string; enabled: boolean; installed: boolean }
 
 export function listPlugins(): Plugin[] {
-  const settings = readJson<{ enabledPlugins?: Record<string, unknown> }>(SETTINGS)
+  const enabled = effectivePlugins()
   const installed = readJson<{ plugins?: Record<string, unknown> }>(INSTALLED)
 
-  const ids = new Set([
-    ...Object.keys(settings?.enabledPlugins ?? {}),
-    ...Object.keys(installed?.plugins ?? {}),
-  ])
+  const ids = new Set([...Object.keys(enabled), ...Object.keys(installed?.plugins ?? {})])
 
   return [...ids]
     .map((id) => ({
       id,
-      enabled: (settings?.enabledPlugins ?? {})[id] !== false && id in (settings?.enabledPlugins ?? {}),
+      enabled: id in enabled && enabled[id] !== false,
       installed: id in (installed?.plugins ?? {}),
     }))
     .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.id.localeCompare(b.id))
@@ -139,10 +152,8 @@ export function listPlugins(): Plugin[] {
  * plugin name is far easier to type on a phone than `name@marketplace`.
  */
 export function setPlugin(name: string, on: boolean): { id: string; changed: boolean } {
-  const settings = readJson<Record<string, any>>(SETTINGS)
-  if (!settings) throw new Error('cannot read settings.json')
-
-  const known = Object.keys(settings.enabledPlugins ?? {})
+  const effective = effectivePlugins()
+  const known = Object.keys(effective)
   const id =
     known.find((k) => k === name) ??
     known.find((k) => k.split('@')[0] === name) ??
@@ -150,17 +161,68 @@ export function setPlugin(name: string, on: boolean): { id: string; changed: boo
       throw new Error(`unknown plugin: ${name}`)
     })()
 
-  const before = settings.enabledPlugins[id]
-  if (before === on) return { id, changed: false }
+  if ((effective[id] !== false) === on) return { id, changed: false }
 
-  settings.enabledPlugins[id] = on
+  // Write to whichever file currently decides it. Setting the global file for
+  // a plugin the local one overrides would change nothing and look like the
+  // toggle was ignored.
+  const local = readJson<Record<string, any>>(LOCAL_SETTINGS)
+  const target = local?.enabledPlugins && id in local.enabledPlugins ? LOCAL_SETTINGS : SETTINGS
 
-  // Written through a temp file: a half-written settings.json disables every
+  const settings = readJson<Record<string, any>>(target)
+  if (!settings) throw new Error(`cannot read ${basename(target)}`)
+  settings.enabledPlugins = { ...(settings.enabledPlugins ?? {}), [id]: on }
+
+  // Written through a temp file: a half-written settings file disables every
   // setting in it, which is a much worse outcome than a failed toggle.
-  const tmp = `${SETTINGS}.tmp`
+  const tmp = `${target}.tmp`
   writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n')
-  renameSync(tmp, SETTINGS)
+  renameSync(tmp, target)
   return { id, changed: true }
+}
+
+// ---------------------------------------------------------------------------
+// CLI diagnostics
+// ---------------------------------------------------------------------------
+
+/**
+ * Claude Code's built-in slash commands are not files, and most of them drive
+ * the terminal UI — there is nothing to run headless. A few exist as CLI
+ * subcommands too, and those we can shell out to.
+ *
+ * A fixed allowlist, never anything the user typed: this runs a real process,
+ * and the arguments must not be reachable from a chat message.
+ */
+export const CLI_COMMANDS: Record<string, { args: string[]; description: string }> = {
+  doctor: { args: ['doctor'], description: 'Installation health check' },
+  version: { args: ['--version'], description: 'Claude Code version' },
+  mcp_health: { args: ['mcp', 'list'], description: 'MCP servers with a live health check' },
+  plugin_list: { args: ['plugin', 'list'], description: 'Installed plugins as the CLI sees them' },
+}
+
+export function runCli(name: string, timeoutMs = 60_000): Promise<string> {
+  const entry = CLI_COMMANDS[name]
+  if (!entry) return Promise.resolve(`unknown: ${name}`)
+
+  return new Promise((resolve) => {
+    // No shell — the argument list is fixed, and spawning through one would
+    // hand a parser something it has no business seeing.
+    const child = spawn('claude', entry.args, { shell: false, windowsHide: true })
+    let out = ''
+    const done = (text: string) => {
+      clearTimeout(timer)
+      try {
+        child.kill()
+      } catch {}
+      resolve(text.trim() || '(no output)')
+    }
+    const timer = setTimeout(() => done(`${out}\n\n(timed out after ${timeoutMs / 1000}s)`), timeoutMs)
+
+    child.stdout?.on('data', (c) => (out += c))
+    child.stderr?.on('data', (c) => (out += c))
+    child.on('error', (err) => done(`could not run claude: ${err.message}`))
+    child.on('close', () => done(out))
+  })
 }
 
 // ---------------------------------------------------------------------------
@@ -180,12 +242,12 @@ export function listMcp(): McpServer[] {
   // Plugins bring their own servers along; those are on exactly when the
   // plugin is. Several versions of a plugin can sit in the cache side by side
   // and declare the same server, so collapse them by name.
-  const settings = readJson<{ enabledPlugins?: Record<string, unknown> }>(SETTINGS)
+  const enabled = effectivePlugins()
   const cache = join(CLAUDE_DIR, 'plugins', 'cache')
   const seen = new Set(out.map((s) => s.name))
   for (const marketplace of dirs(cache)) {
     for (const plugin of dirs(join(cache, marketplace))) {
-      if ((settings?.enabledPlugins ?? {})[`${plugin}@${marketplace}`] === false) continue
+      if (enabled[`${plugin}@${marketplace}`] === false) continue
       for (const version of dirs(join(cache, marketplace, plugin))) {
         const mcp = readJson<{ mcpServers?: Record<string, any> }>(
           join(cache, marketplace, plugin, version, '.mcp.json'),

@@ -340,7 +340,7 @@ async function handleInbound(
 
   // Questions about the bridge itself are answered here — they need no session,
   // and answering them locally means they still work while a turn is busy.
-  const native = handleCommand(text, chat_id)
+  const native = await handleCommand(text, chat_id)
   if (native) {
     recordHistory(chat_id, { ts: new Date().toISOString(), dir: 'in', from: from.username ?? String(from.id), text })
     // A full command listing runs well past Telegram's 4096-character cap, so
