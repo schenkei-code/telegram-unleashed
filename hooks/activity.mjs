@@ -35,10 +35,12 @@ const FEED_DIR = join(STATE_DIR, 'activity')
  * carries the same text plus whatever arrived since.
  */
 const EDIT_INTERVAL_MS = 900
-/** Telegram's cap is 4096; leave room for the header and the trailing marker. */
+/** Telegram's cap is 4096; leave room for the block markup around the body. */
 const MAX_CHARS = 3600
-/** Lines a card holds before it is retired and a fresh one takes over. */
-const MAX_LINES = 10
+/** Steps a card holds before it is retired and a fresh one takes over. */
+const MAX_LINES = 8
+/** Result lines printed under a call, as the terminal truncates them too. */
+const RESULT_LINES = 2
 /** How long a finished card stays editable before the next turn opens a new one. */
 const CARD_IDLE_MS = 90_000
 
@@ -74,15 +76,18 @@ async function main() {
     pushLine(st, toolLine(payload.tool_name, payload.tool_input ?? {}))
   }
 
+  // The result belongs to the call above it, the way the terminal prints it.
+  if (event === 'PostToolUse' && payload.tool_name) {
+    attachResult(st, resultText(payload))
+  }
+
   if (event === 'UserPromptSubmit') {
     // New turn — retire the previous card so the next line opens a fresh one.
     st.messageId = null
     st.lines = []
-    st.done = false
   }
 
   const finished = event === 'Stop'
-  if (finished) st.done = true
 
   if (!st.chatId || !st.lines.length) {
     saveState(stateFile, st)
@@ -181,7 +186,6 @@ function ingest(st, entry) {
       if (st.seenInbound.length > 50) st.seenInbound = st.seenInbound.slice(-50)
       st.messageId = null
       st.lines = []
-      st.done = false
     }
     return
   }
@@ -252,47 +256,78 @@ function pushLine(st, line) {
   st.lines.push(line)
 }
 
-/** One compact line describing a tool call. */
+/**
+ * One tool call, written the way the terminal writes it: `Tool(argument)`.
+ * The argument is whatever identifies the call at a glance — the command, the
+ * file, the pattern — because that is what the terminal shows and this feed
+ * exists to be the same view from a phone.
+ */
 function toolLine(name, input) {
   // Sending to Telegram is what produces this feed; echoing it is a loop.
   if (/telegram-unleashed/.test(name)) return null
 
   const short = name.replace(/^mcp__[^_]*__/, '').replace(/^mcp__/, '')
   const file = (p) => (typeof p === 'string' ? basename(p) : '')
+  const call = (arg) => ({ kind: 'tool', text: `${short}(${arg})` })
 
   switch (short) {
     case 'Read':
-      return { kind: 'tool', text: `read ${file(input.file_path)}` }
     case 'Write':
-      return { kind: 'tool', text: `write ${file(input.file_path)}` }
     case 'Edit':
-      return { kind: 'tool', text: `edit ${file(input.file_path)}` }
+      return call(file(input.file_path))
     case 'NotebookEdit':
-      return { kind: 'tool', text: `edit ${file(input.notebook_path)}` }
+      return call(file(input.notebook_path))
     case 'Bash':
     case 'PowerShell':
       // The command itself, not the description — a paraphrase of a shell
       // command is strictly less information than the command.
-      return { kind: 'tool', text: clip(input.command || input.description || short, 160) }
+      return call(clip(input.command || input.description || '', 160))
     case 'Grep':
-      return { kind: 'tool', text: `grep "${clip(input.pattern ?? '', 50)}"` }
+      return call(clip(input.pattern ?? '', 50))
     case 'Glob':
-      return { kind: 'tool', text: `find ${clip(input.pattern ?? '', 50)}` }
+      return call(clip(input.pattern ?? '', 50))
     case 'Agent':
-      return { kind: 'tool', text: `subagent: ${clip(input.description ?? '', 70)}` }
     case 'Task':
-      return { kind: 'tool', text: clip(input.description ?? short, 70) }
+      return call(clip(input.description ?? '', 70))
     case 'WebFetch':
-      return { kind: 'tool', text: `fetch ${clip(input.url ?? '', 70)}` }
+      return call(clip(input.url ?? '', 70))
     case 'WebSearch':
-      return { kind: 'tool', text: `search: ${clip(input.query ?? '', 60)}` }
+      return call(clip(input.query ?? '', 60))
     case 'Skill':
-      return { kind: 'tool', text: `skill ${input.skill ?? ''}` }
+      return call(input.skill ?? '')
     case 'ToolSearch':
       return null
     default:
-      return { kind: 'tool', text: short }
+      return call('')
   }
+}
+
+/** The result the terminal prints under a call, or '' when there is nothing. */
+function resultText(payload) {
+  const r = payload.tool_response ?? payload.tool_result ?? payload.result
+  if (r == null) return ''
+  if (typeof r === 'string') return r
+  // Structured responses vary by tool; take the first field that reads as text.
+  const candidate = r.stdout ?? r.output ?? r.content ?? r.text ?? r.message
+  if (typeof candidate === 'string') return candidate
+  if (Array.isArray(candidate)) {
+    return candidate.map((c) => (typeof c === 'string' ? c : (c?.text ?? ''))).join('\n')
+  }
+  return ''
+}
+
+/** Hang a result off the call it belongs to, rather than pushing a new line. */
+function attachResult(st, text) {
+  const last = st.lines?.[st.lines.length - 1]
+  if (!last || last.kind !== 'tool' || last.result) return
+  const body = String(text).replace(/\r/g, '').trim()
+  if (!body) return
+
+  const all = body.split('\n').filter((l) => l.trim())
+  const shown = all.slice(0, RESULT_LINES).map((l) => clip(l, 76))
+  const hidden = all.length - shown.length
+  if (hidden > 0) shown.push(`… +${hidden} line${hidden === 1 ? '' : 's'}`)
+  last.result = shown
 }
 
 function clip(s, n) {
@@ -304,17 +339,29 @@ function clip(s, n) {
 // Rendering
 // ---------------------------------------------------------------------------
 
+/**
+ * The card, in the terminal's own shape: a bullet per step, results indented
+ * beneath the call that produced them. Rendered as one monospace block so the
+ * indentation survives — a chat bubble reflows it into prose otherwise.
+ *
+ * No trailing "working…" marker: the status line the plugin posts alongside
+ * carries the clock and the closing word, and saying it twice is noise.
+ */
 function render(st) {
   const parts = []
   for (const line of st.lines ?? []) {
-    if (line.kind === 'tool') parts.push(`<code>› ${esc(line.text)}</code>`)
-    else parts.push(esc(line.text))
+    // Prose opens a paragraph the way it does in the terminal; consecutive
+    // tool calls stay packed, because a phone screen is not a terminal.
+    if (line.kind === 'text' && parts.length) parts.push('')
+    parts.push(`● ${line.text}`)
+    if (line.result?.length) {
+      parts.push(`  ⎿  ${line.result[0]}`)
+      for (const extra of line.result.slice(1)) parts.push(`     ${extra}`)
+    }
   }
   let body = parts.join('\n')
   if (body.length > MAX_CHARS) body = '…\n' + body.slice(-(MAX_CHARS - 2))
-
-  const marker = st.done ? '\n\n<i>done</i>' : '\n\n<i>working…</i>'
-  return body + marker
+  return `<pre>${esc(body)}</pre>`
 }
 
 function esc(s) {
