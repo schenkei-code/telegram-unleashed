@@ -13,8 +13,17 @@ and decisions you settle with a thumb.
 
 ---
 
-*Author: hunch intentional agent — a fork of the official `telegram` plugin,
-whose access-control model is carried over unchanged.*
+*A fork of the official `telegram` plugin, whose access-control model is
+carried over unchanged.*
+
+## Install
+
+```
+/plugin marketplace add schenkei-code/telegram-unleashed
+/plugin install telegram-unleashed@telegram-unleashed
+```
+
+Then set up the bot — see [Setup](#setup) — and restart Claude Code.
 
 ## What it does differently
 

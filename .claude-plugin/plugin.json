@@ -2,6 +2,6 @@
   "name": "telegram-unleashed",
   "description": "Telegram channel for Claude Code, unleashed. Live-streaming answers, an activity indicator that outlives five seconds, automatic Markdown formatting that never breaks code blocks, albums and 2 GB uploads, and permissions, plans and questions answered by tapping a button.",
   "version": "1.0.0",
-  "author": { "name": "hunch intentional agent" },
+  "author": { "name": "Schenkei", "url": "https://github.com/schenkei-code" },
   "keywords": ["telegram", "messaging", "channel", "mcp", "streaming"]
 }

@@ -2,7 +2,7 @@
   "name": "telegram-unleashed",
   "version": "1.0.0",
   "type": "module",
-  "author": "hunch intentional agent",
+  "author": "Schenkei",
   "scripts": {
     "start": "bun run src/index.ts"
   },

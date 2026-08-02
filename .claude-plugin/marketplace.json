@@ -1,6 +1,6 @@
 {
   "name": "hunch",
-  "owner": { "name": "hunch intentional agent" },
+  "owner": { "name": "Schenkei", "url": "https://github.com/schenkei-code" },
   "plugins": [
     {
       "name": "telegram-unleashed",
