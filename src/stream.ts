@@ -17,6 +17,7 @@
 import type { Bot } from 'grammy'
 import { prefs } from './config.js'
 import { markdownToHtml, chunkHtml } from './format.js'
+import { stopHeartbeat } from './status.js'
 
 type Api = Bot['api']
 
@@ -55,8 +56,12 @@ export function startTyping(api: Api, chat_id: string, action: 'typing' | 'uploa
   timers.set(chat_id, t)
 }
 
-/** Stop the indicator. Called as soon as real output goes out. */
+/**
+ * Stop the indicator. Called as soon as real output goes out — which is also
+ * exactly when the status message has served its purpose, so it goes with it.
+ */
 export function stopTyping(chat_id: string): void {
+  stopHeartbeat(chat_id)
   const t = timers.get(chat_id)
   if (t) clearInterval(t)
   timers.delete(chat_id)

@@ -24,6 +24,7 @@ import {
   typeOut,
 } from './stream.js'
 import type { TypeUnit } from './stream.js'
+import { startHeartbeat, setHeartbeatText } from './status.js'
 import { ask, sendPlan, pendingCounts } from './interactive.js'
 import { record, read as readHistory, chats as historyChats, format as formatHistory } from './history.js'
 
@@ -121,6 +122,19 @@ export const TOOL_DEFS = [
         timeout_sec: { type: 'number', description: 'Default 900.' },
       },
       required: ['chat_id', 'title', 'body'],
+    },
+  },
+  {
+    name: 'status',
+    description:
+      'Reword the status line the plugin already posted for this turn — "Reading the repo", "Running the tests". The emoji keeps cycling and the clock keeps running; the line is deleted for you when your answer goes out. Use it when a turn takes long enough that the sender would wonder what you are doing.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        chat_id: { type: 'string' },
+        text: { type: 'string', description: 'Short present-tense phrase, no trailing ellipsis.' },
+      },
+      required: ['chat_id', 'text'],
     },
   },
   {
@@ -589,6 +603,17 @@ export async function callTool(
         return 'stopped'
       }
       startTyping(api, chat_id, (args.action as never) ?? 'typing')
+      return 'started'
+    }
+
+    case 'status': {
+      const chat_id = str(args.chat_id)
+      assertAllowedChat(chat_id)
+      const text = str(args.text)
+      if (setHeartbeatText(chat_id, text)) return 'updated'
+      // No live status line — usually because the turn already produced output.
+      startHeartbeat(api, chat_id)
+      setHeartbeatText(chat_id, text)
       return 'started'
     }
 

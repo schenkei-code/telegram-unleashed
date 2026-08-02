@@ -98,6 +98,25 @@ export type Access = {
   /** Hard stop for the keepalive so a hung turn can't poke forever. Default 600. */
   typingMaxSec?: number
   /**
+   * Post a status message of its own the moment a message arrives, with a
+   * cycling emoji and a running clock, and delete it when the answer goes out.
+   * A chat action alone leaves the sender unable to tell a working session from
+   * a bridge that stopped receiving. Default true.
+   */
+  heartbeat?: boolean
+  /** Words the status line rotates through. */
+  heartbeatWords?: string[]
+  /** Emoji frames the status line cycles. */
+  heartbeatFrames?: string[]
+  /**
+   * Optional one-liners shown under the status line, one picked per turn.
+   * Empty by default — fill it locally with whatever is worth reading while
+   * waiting, rather than shipping someone else's copy in the package.
+   */
+  heartbeatTips?: string[]
+  /** Seconds between frames. Telegram rate-limits edits, so don't go below ~3. Default 4. */
+  heartbeatIntervalSec?: number
+  /**
    * Default rendering mode for reply/edit when the caller omits `format`.
    * 'auto' converts common Markdown to Telegram HTML and escapes everything
    * else — the safe default, no caller-side escaping needed.
@@ -134,6 +153,9 @@ export type Access = {
    */
   history?: boolean
 }
+
+const HEARTBEAT_WORDS = ['Pondering', 'Twisting', 'Musing', 'Digging', 'Untangling', 'Brewing']
+const HEARTBEAT_FRAMES = ['🤔', '💭', '🧠', '💭']
 
 export function defaultAccess(): Access {
   return { dmPolicy: 'pairing', allowFrom: [], groups: {}, pending: {} }
@@ -189,6 +211,11 @@ export function prefs(a: Access = loadAccess()) {
     typingKeepalive: a.typingKeepalive ?? true,
     typingIntervalSec: Math.max(1, a.typingIntervalSec ?? 4),
     typingMaxSec: Math.max(10, a.typingMaxSec ?? 600),
+    heartbeat: a.heartbeat ?? true,
+    heartbeatWords: a.heartbeatWords?.length ? a.heartbeatWords : HEARTBEAT_WORDS,
+    heartbeatFrames: a.heartbeatFrames?.length ? a.heartbeatFrames : HEARTBEAT_FRAMES,
+    heartbeatTips: a.heartbeatTips ?? [],
+    heartbeatIntervalSec: Math.max(3, a.heartbeatIntervalSec ?? 4),
     defaultFormat: a.defaultFormat ?? 'auto',
     streaming: a.streaming ?? true,
     streamIntervalMs: Math.max(400, a.streamIntervalMs ?? 1200),

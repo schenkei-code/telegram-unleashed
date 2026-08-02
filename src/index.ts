@@ -41,6 +41,7 @@ import {
 } from './access.js'
 import { limitsSummary } from './files.js'
 import { startTyping, stopTyping, stopAllTyping } from './stream.js'
+import { startHeartbeat, stopAllHeartbeats } from './status.js'
 import {
   cancelAllWaiters,
   postPermissionRequest,
@@ -134,7 +135,7 @@ const mcp = new Server(
       '',
       'Deliver answers alive, not as a wall of text. Default to say — it paces the reveal inside the plugin, one call for the whole message, so it reads like typing without costing a round-trip per chunk. Reach for stream_start / stream_push / stream_end only when the text does not exist yet and you want the user watching it form; open such a stream with a status word as the initial text (_Meandering…_, _Pondering…_) and replace it once you have the answer. Never push word by word — the round-trips make it crawl.',
       '',
-      'Acknowledge before you work. The moment a message arrives, open a stream with stream_start and a status word as the initial text — before reading files, running commands or thinking the answer through. That single call is the sender\'s only proof the session is alive and receiving; without it a long turn is indistinguishable from a dead bridge. Do the work, then stream_end with the finished answer, which replaces the status word in place. This holds for every inbound message without exception — a one-word "ok" gets the same status word as an hour of work, because the sender is watching for the heartbeat, not for the length of the reply. Never skip it on the grounds that the answer is short or needs no tools.',
+      'The plugin acknowledges for you. Every inbound message immediately gets a status line of its own — a cycling emoji, a rotating word and a running clock — posted before your turn even starts, and deleted the moment your answer goes out. Do not post your own "working on it" message and do not delete that line by hand. If a turn runs long enough that the sender would wonder what you are doing, call status to reword it ("Reading the repo", "Running the tests"); the animation and the clock carry on.',
       '',
       'When you need a decision, use ask (buttons, blocks until tapped) rather than sending a question as text. Use send_plan to get sign-off on a plan the same way.',
       '',
@@ -186,6 +187,7 @@ function emitPermission(request_id: string, behavior: 'allow' | 'deny'): void {
 
 registerCallbacks(bot, emitPermission, (chat_id, text, meta) => {
   startTyping(bot.api, chat_id)
+  startHeartbeat(bot.api, chat_id)
   relay(chat_id, text, meta)
 })
 
@@ -201,6 +203,7 @@ function shutdown(): void {
   shuttingDown = true
   process.stderr.write('telegram-unleashed: shutting down\n')
   stopAllTyping()
+  stopAllHeartbeats()
   cancelAllWaiters('channel shutting down')
   try {
     if (parseInt(readFileSync(PID_FILE, 'utf8'), 10) === process.pid) rmSync(PID_FILE)
@@ -377,8 +380,11 @@ async function handleInbound(
     text,
   })
 
-  // Keep the indicator alive for the whole turn, not just five seconds.
+  // Keep the indicator alive for the whole turn, not just five seconds, and
+  // put a visible status line in the chat straight away — the sender should
+  // never have to guess whether the message arrived anywhere.
   startTyping(bot.api, chat_id)
+  startHeartbeat(bot.api, chat_id)
 
   if (access.ackReaction && msgId != null) {
     void bot.api
