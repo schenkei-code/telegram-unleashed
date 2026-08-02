@@ -54,15 +54,37 @@ export async function publishMenu(bot: Bot, scope: { type: 'all_private_chats' }
     const s = slug(c.name)
     if (!s || seen.has(s)) continue
     seen.add(s)
-    entries.push({
-      command: s,
-      // Telegram rejects an empty description and truncates past 256.
-      description: (c.description || c.name).slice(0, 256),
-    })
+    // Telegram rejects an empty description and allows 256 per entry — but
+    // the *total* payload has its own undocumented ceiling, which sixty full
+    // ones already exceed. Skill descriptions are paragraphs, so clip hard.
+    entries.push({ command: s, description: clipDescription(c.description || c.name) })
   }
 
-  await bot.api.setMyCommands(entries, scope ? { scope } : undefined)
-  return entries.length
+  // The ceiling is not published anywhere, so back off rather than guess it:
+  // shorten first, and only start dropping entries once that stops helping.
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await bot.api.setMyCommands(entries, scope ? { scope } : undefined)
+      return entries.length
+    } catch (err) {
+      if (!/BOT_COMMANDS_TOO_MUCH/i.test(String((err as any)?.description ?? err)) || attempt >= 6) throw err
+      if (attempt < 3) {
+        const max = [60, 40, 24][attempt]
+        for (const e of entries) e.description = e.description.slice(0, max)
+      } else {
+        entries.length = Math.max(NATIVE.length, Math.floor(entries.length / 2))
+      }
+    }
+  }
+}
+
+/** One useful line, not the first paragraph of a skill's frontmatter. */
+function clipDescription(text: string): string {
+  const one = text.replace(/\s+/g, ' ').trim()
+  if (one.length <= 80) return one
+  // Prefer a sentence boundary if there is one early enough to be worth it.
+  const dot = one.slice(0, 80).lastIndexOf('. ')
+  return dot > 30 ? one.slice(0, dot + 1) : one.slice(0, 79) + '…'
 }
 
 /**
