@@ -102,6 +102,13 @@ async function main() {
     st.lastBody = body
     st.lastEdit = now
   }
+
+  // The card belongs to the turn that produced it. Once the turn ends, let it
+  // stand as a record and start the next one in its own message.
+  if (finished) {
+    st.messageId = null
+    st.lines = []
+  }
   saveState(stateFile, st)
 }
 
@@ -148,14 +155,20 @@ function readTranscriptTail(path, offset) {
 
 /** Fold one transcript entry into the card. */
 function ingest(st, entry) {
-  const msg = entry?.message
-  if (!msg) return
-
-  if (entry.type === 'user') {
-    const chat = findChatId(msg.content)
-    if (chat) {
-      // An inbound Telegram message opens a new card for the turn it starts.
-      st.chatId = chat
+  // The same inbound message shows up under several entry types — as a `user`
+  // entry when it starts a turn, and as `queue-operation` when it arrives
+  // mid-turn, often repeated. Keying on its message_id collapses all of that
+  // into one new card per actual message.
+  const inbound = findInbound(entry)
+  if (inbound) {
+    st.chatId = inbound.chatId
+    // The two forms are not adjacent — a message queued mid-turn reappears as
+    // a `user` entry once it is actually processed — so remembering only the
+    // previous id would open a second card for the same message.
+    st.seenInbound = st.seenInbound ?? []
+    if (inbound.messageId && !st.seenInbound.includes(inbound.messageId)) {
+      st.seenInbound.push(inbound.messageId)
+      if (st.seenInbound.length > 50) st.seenInbound = st.seenInbound.slice(-50)
       st.messageId = null
       st.lines = []
       st.done = false
@@ -163,6 +176,8 @@ function ingest(st, entry) {
     return
   }
 
+  const msg = entry?.message
+  if (!msg) return
   if (entry.type !== 'assistant' || !Array.isArray(msg.content)) return
   for (const block of msg.content) {
     // Thinking stays private; tool_use is already covered by PreToolUse.
@@ -170,16 +185,22 @@ function ingest(st, entry) {
   }
 }
 
-/** Extract the chat id from an inbound channel tag, ignoring the doc placeholder. */
-function findChatId(content) {
+/** Chat and message id of an inbound channel tag, or null if this isn't one. */
+function findInbound(entry) {
+  const content = entry?.message?.content ?? entry?.content
   const text =
     typeof content === 'string'
       ? content
       : Array.isArray(content)
         ? content.map((b) => (typeof b === 'string' ? b : (b?.text ?? ''))).join('\n')
         : ''
-  const m = /<channel[^>]*\bsource="plugin:telegram-unleashed[^"]*"[^>]*\bchat_id="(-?\d+)"/.exec(text)
-  return m ? m[1] : null
+  if (!text) return null
+
+  const tag = /<channel[^>]*\bsource="plugin:telegram-unleashed[^"]*"[^>]*>/.exec(text)
+  if (!tag) return null
+  const chatId = /\bchat_id="(-?\d+)"/.exec(tag[0])?.[1]
+  if (!chatId) return null
+  return { chatId, messageId: /\bmessage_id="(\d+)"/.exec(tag[0])?.[1] ?? null }
 }
 
 // ---------------------------------------------------------------------------
