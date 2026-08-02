@@ -206,8 +206,18 @@ export async function closeStream(
   if (finalText != null) st.text = finalText
   st.closed = true
   streams.delete(stream_id)
-  stopTyping(st.chat_id)
 
+  // Closing the turn is deferred to the finally below: the status line settles
+  // to the *end* of the chat now, and settling it before the answer is sent
+  // would put the closing line above the thing it is closing.
+  try {
+    return await commit(api, st)
+  } finally {
+    stopTyping(st.chat_id)
+  }
+}
+
+async function commit(api: Api, st: StreamState): Promise<number[]> {
   const p = prefs()
   const html = markdownToHtml(st.text)
 

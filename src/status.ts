@@ -10,8 +10,12 @@
  * posted whole (never typed out — a status word that reveals itself letter by
  * letter defeats the point of being instant) with an emoji after it that cycles
  * while the turn runs. The animation lives in this process, so it keeps moving
- * regardless of what the agent is doing, and it clears itself the moment real
- * output goes out.
+ * regardless of what the agent is doing.
+ *
+ * When the answer goes out the line closes itself — but at the bottom of the
+ * chat, not where it started. A turn puts an answer and a stack of activity
+ * cards between the two, and a closing line settled in place is one nobody
+ * scrolls back far enough to see.
  */
 
 import type { Bot } from 'grammy'
@@ -129,18 +133,29 @@ function settle(beat: Beat): void {
     trace(`heartbeat settle skipped — no message yet (target=${beat.target})`)
     return
   }
+  const id = beat.messageId
   if (!prefs().heartbeatKeep) {
-    void beat.api.deleteMessage(beat.target, beat.messageId).catch(() => {})
+    void beat.api.deleteMessage(beat.target, id).catch(() => {})
     return
   }
-  void beat.api
-    .editMessageText(beat.target, beat.messageId, renderDone(beat), {
-      parse_mode: 'HTML',
-      link_preview_options: { is_disabled: true },
-    })
-    // Nobody awaits this, so a rejection here is what "the closing line never
-    // appeared" looks like from the chat. Silence would leave it unexplained.
-    .catch((err) => trace(`heartbeat settle failed msg=${beat.messageId}: ${err?.description ?? err}`))
+
+  // The line was posted before the turn started, so by now the answer and any
+  // activity cards sit below it — edited in place it settles somewhere nobody
+  // scrolls back to. So it moves: the old line goes, the closing one arrives at
+  // the end of the chat where the turn actually finished. Silent, because it
+  // marks the end of something the user has already been notified about.
+  void (async () => {
+    await beat.api.deleteMessage(beat.target, id).catch(() => {})
+    await beat.api
+      .sendMessage(beat.target, renderDone(beat), {
+        parse_mode: 'HTML',
+        disable_notification: true,
+        link_preview_options: { is_disabled: true },
+      })
+      // Nobody awaits this, so a rejection here is what "the closing line never
+      // appeared" looks like from the chat. Silence would leave it unexplained.
+      .catch((err) => trace(`heartbeat settle failed msg=${id}: ${err?.description ?? err}`))
+  })()
 }
 
 export function stopAllHeartbeats(): void {
