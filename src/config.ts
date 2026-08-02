@@ -130,7 +130,7 @@ export type Access = {
    * waiting, rather than shipping someone else's copy in the package.
    */
   heartbeatTips?: string[]
-  /** Seconds between frames. Telegram rate-limits edits, so don't go below ~3. Default 4. */
+  /** Seconds between frames. Telegram rate-limits edits, so don't go below ~3. Default 3. */
   heartbeatIntervalSec?: number
   /**
    * Leave the status line in the chat when the turn ends, rewritten to a
@@ -189,7 +189,12 @@ export type Access = {
 }
 
 const HEARTBEAT_WORDS = ['Pondering', 'Twisting', 'Musing', 'Digging', 'Untangling', 'Brewing']
-const HEARTBEAT_FRAMES = ['🤔', '💭', '🧠', '💭']
+/**
+ * Claude Code's own spinner, one glyph per frame and back again. Emoji would
+ * be louder, but the point of this line is that it looks like the terminal the
+ * work is actually happening in.
+ */
+const HEARTBEAT_FRAMES = ['·', '✢', '✳', '∗', '✻', '✽', '✻', '∗', '✳', '✢']
 const HEARTBEAT_DONE_WORDS = ['Done', 'Finished', 'Wrapped up']
 
 export function defaultAccess(): Access {
@@ -250,7 +255,11 @@ export function prefs(a: Access = loadAccess()) {
     heartbeatWords: a.heartbeatWords?.length ? a.heartbeatWords : HEARTBEAT_WORDS,
     heartbeatFrames: a.heartbeatFrames?.length ? a.heartbeatFrames : HEARTBEAT_FRAMES,
     heartbeatTips: a.heartbeatTips ?? [],
-    heartbeatIntervalSec: Math.max(3, a.heartbeatIntervalSec ?? 4),
+    // Telegram throttles edits to a message at roughly one a second and
+    // starts dropping them past twenty a minute, so the terminal's eight
+    // frames a second is not reachable here — three seconds is as close as
+    // the platform allows while the activity card is editing too.
+    heartbeatIntervalSec: Math.max(3, a.heartbeatIntervalSec ?? 3),
     heartbeatKeep: a.heartbeatKeep ?? true,
     heartbeatDoneWords: a.heartbeatDoneWords?.length ? a.heartbeatDoneWords : HEARTBEAT_DONE_WORDS,
     heartbeatDoneFrame: a.heartbeatDoneFrame ?? '✳',

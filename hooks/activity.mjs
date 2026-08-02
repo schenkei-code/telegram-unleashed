@@ -43,8 +43,12 @@ const MAX_CHARS = 3600
  * times as many lines on screen.
  */
 const MAX_LINES = 6
-/** Result lines printed under a call, as the terminal truncates them too. */
-const RESULT_LINES = 2
+/**
+ * Result lines printed under a call. The terminal shows about five before it
+ * collapses the rest behind ctrl+o; four plus the "+N lines" tail is the same
+ * shape in a message that also has to fit on a phone.
+ */
+const RESULT_LINES = 4
 /** How long a finished card stays editable before the next turn opens a new one. */
 const CARD_IDLE_MS = 90_000
 
