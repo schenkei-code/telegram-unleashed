@@ -21,9 +21,14 @@ import {
   listMcp,
   setPlugin,
   runCli,
+  getSetting,
+  setSetting,
+  MODELS,
+  EFFORTS,
   CLI_COMMANDS,
   type Plugin,
   type Command,
+  type Choice,
 } from './control.js'
 import { read as readHistory, format as formatHistory } from './history.js'
 import { draftSupport } from './stream.js'
@@ -41,6 +46,8 @@ function slug(name: string): string {
 /** Commands the plugin answers itself, in menu order. */
 const NATIVE: { name: string; description: string }[] = [
   { name: 'commands', description: 'List every skill and command available' },
+  { name: 'model', description: 'Model — tap to switch' },
+  { name: 'effort', description: 'Reasoning effort — tap to switch' },
   { name: 'plugins', description: 'Plugins — tap to turn on or off' },
   { name: 'mcp', description: 'MCP servers currently configured' },
   { name: 'history', description: 'Recent messages in this chat' },
@@ -152,6 +159,22 @@ export async function handleCommand(text: string, chat_id: string): Promise<Hand
       return { text: `*${all.length} commands*\n\n${lines.join('\n')}` }
     }
 
+    case 'model':
+    case 'effort': {
+      const field = name === 'model' ? MODEL_FIELD : EFFORT_FIELD
+      // Typed with a value it is a direct set; tapped from the menu it opens
+      // the picker, since a menu entry carries no argument.
+      if (arg.trim()) {
+        const wanted = arg.trim().toLowerCase()
+        const choice = field.choices.find((c) => c.value === wanted || c.label.toLowerCase() === wanted)
+        if (!choice) {
+          return { text: `Unknown ${field.noun}: \`${arg.trim()}\`\n\n${field.choices.map((c) => c.value).join(', ')}` }
+        }
+        setSetting(field.key, choice.value)
+      }
+      return choiceView(field)
+    }
+
     case 'plugins':
       return pluginsView()
 
@@ -174,6 +197,8 @@ export async function handleCommand(text: string, chat_id: string): Promise<Hand
         text: [
           `*Bridge status*`,
           `channel: ${CHANNEL}`,
+          `model: ${getSetting('model') ?? 'unset'}`,
+          `effort: ${getSetting('effortLevel') ?? 'unset'}`,
           `streaming: ${draftSupport() === 'no' ? 'edit fallback' : 'rich drafts'}`,
           `plugins: ${plugins.filter((p) => p.enabled).length} on / ${plugins.length} known`,
           `mcp servers: ${listMcp().length}`,
@@ -230,6 +255,55 @@ export function resolveRun(payload: string): string | null {
   if (payload === 'cancel') return null
   const cmd = cardOrder[Number(payload)]
   return cmd ? `/${cmd.name}` : null
+}
+
+// ---------------------------------------------------------------------------
+// Model and effort pickers
+// ---------------------------------------------------------------------------
+
+type Field = { key: string; noun: string; title: string; prefix: string; choices: Choice[] }
+
+const MODEL_FIELD: Field = { key: 'model', noun: 'model', title: 'Model', prefix: 'md', choices: MODELS }
+const EFFORT_FIELD: Field = { key: 'effortLevel', noun: 'effort level', title: 'Reasoning effort', prefix: 'ef', choices: EFFORTS }
+
+const FIELDS: Record<string, Field> = { md: MODEL_FIELD, ef: EFFORT_FIELD }
+
+function choiceView(field: Field): Handled {
+  const current = getSetting(field.key)
+  const keyboard = new InlineKeyboard()
+  field.choices.forEach((c, i) => {
+    if (i > 0 && i % 2 === 0) keyboard.row()
+    keyboard.text(`${c.value === current ? '●' : '○'} ${c.label}`, `${field.prefix}:${i}`)
+  })
+
+  // A value someone set by hand — a full model id, say — is worth showing even
+  // though no button matches it, or the card would claim nothing is set.
+  const known = field.choices.some((c) => c.value === current)
+  const shown = current ?? 'unset'
+  return {
+    text: [
+      `*${field.title}* — \`${shown}\`${current && !known ? ' _(not in this list)_' : ''}`,
+      '',
+      'Tap to switch. Takes effect after a restart.',
+    ].join('\n'),
+    keyboard,
+  }
+}
+
+/** Handle a tap on a model or effort button. */
+export function chooseSetting(prefix: string, index: number): { view: Handled; note: string } {
+  const field = FIELDS[prefix]
+  if (!field) return { view: { text: 'Unknown setting.' }, note: 'Unknown setting.' }
+
+  const choice = field.choices[index]
+  if (!choice) return { view: choiceView(field), note: 'Stale — reopened.' }
+
+  try {
+    const changed = setSetting(field.key, choice.value)
+    return { view: choiceView(field), note: changed ? `${field.noun}: ${choice.value}` : 'Already set.' }
+  } catch (err) {
+    return { view: choiceView(field), note: err instanceof Error ? err.message : String(err) }
+  }
 }
 
 // ---------------------------------------------------------------------------

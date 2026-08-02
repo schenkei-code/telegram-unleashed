@@ -169,16 +169,81 @@ export function setPlugin(name: string, on: boolean): { id: string; changed: boo
   const local = readJson<Record<string, any>>(LOCAL_SETTINGS)
   const target = local?.enabledPlugins && id in local.enabledPlugins ? LOCAL_SETTINGS : SETTINGS
 
+  mutateSettings(target, (settings) => {
+    settings.enabledPlugins = { ...(settings.enabledPlugins ?? {}), [id]: on }
+  })
+  return { id, changed: true }
+}
+
+/**
+ * Rewrite a settings file through a temp file. A half-written settings file
+ * disables every setting in it, which is a far worse outcome than a change
+ * that did not apply.
+ */
+function mutateSettings(target: string, apply: (settings: Record<string, any>) => void): void {
   const settings = readJson<Record<string, any>>(target)
   if (!settings) throw new Error(`cannot read ${basename(target)}`)
-  settings.enabledPlugins = { ...(settings.enabledPlugins ?? {}), [id]: on }
-
-  // Written through a temp file: a half-written settings file disables every
-  // setting in it, which is a much worse outcome than a failed toggle.
+  apply(settings)
   const tmp = `${target}.tmp`
   writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n')
   renameSync(tmp, target)
-  return { id, changed: true }
+}
+
+// ---------------------------------------------------------------------------
+// Model and reasoning effort
+// ---------------------------------------------------------------------------
+
+export type Choice = { value: string; label: string }
+
+/**
+ * What the menu offers. A fixed list, never free text from a message: this
+ * writes into the settings file the CLI boots from, and a typo there is a
+ * session that will not start.
+ *
+ * The `[1m]` variants are the same models with the long context window; they
+ * are worth their own entries because that is the choice actually being made
+ * on a phone, not an alias of the short-window one.
+ */
+export const MODELS: Choice[] = [
+  { value: 'opus', label: 'Opus' },
+  { value: 'opus[1m]', label: 'Opus 1M' },
+  { value: 'sonnet', label: 'Sonnet' },
+  { value: 'sonnet[1m]', label: 'Sonnet 1M' },
+  { value: 'haiku', label: 'Haiku' },
+  { value: 'fable', label: 'Fable' },
+]
+
+export const EFFORTS: Choice[] = [
+  { value: 'low', label: 'low' },
+  { value: 'medium', label: 'medium' },
+  { value: 'high', label: 'high' },
+  { value: 'xhigh', label: 'xhigh' },
+  { value: 'max', label: 'max' },
+]
+
+/** The value in force, with the local file winning as it does for plugins. */
+export function getSetting(key: string): string | null {
+  const local = readJson<Record<string, any>>(LOCAL_SETTINGS)
+  if (local && key in local) return String(local[key])
+  const global = readJson<Record<string, any>>(SETTINGS)
+  if (global && key in global) return String(global[key])
+  return null
+}
+
+/**
+ * Set a top-level setting. Returns false when it already had that value, so a
+ * tap on the entry that is already selected reads as a no-op rather than a
+ * change that did nothing.
+ */
+export function setSetting(key: string, value: string): boolean {
+  if (getSetting(key) === value) return false
+
+  const local = readJson<Record<string, any>>(LOCAL_SETTINGS)
+  const target = local && key in local ? LOCAL_SETTINGS : SETTINGS
+  mutateSettings(target, (settings) => {
+    settings[key] = value
+  })
+  return true
 }
 
 // ---------------------------------------------------------------------------

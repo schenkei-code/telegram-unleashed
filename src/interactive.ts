@@ -17,7 +17,7 @@ import { InlineKeyboard } from 'grammy'
 import { randomBytes } from 'crypto'
 import { loadAccess, prefs } from './config.js'
 import { markdownToHtml, escapeHtml, collapse } from './format.js'
-import { togglePlugin, resolveRun } from './commands.js'
+import { togglePlugin, resolveRun, chooseSetting } from './commands.js'
 
 type Api = Bot['api']
 
@@ -247,6 +247,21 @@ export function registerCallbacks(bot: Bot, emitPermission: PermissionEmitter, r
         user_id: senderId,
         ts: new Date().toISOString(),
       })
+      return
+    }
+
+    // ---- model and effort pickers ----
+    const setting = /^(md|ef):(\d{1,3})$/.exec(data)
+    if (setting) {
+      const { view, note } = chooseSetting(setting[1], Number(setting[2]))
+      await ctx.answerCallbackQuery({ text: note }).catch(() => {})
+      await ctx
+        .editMessageText(markdownToHtml(view.text), {
+          parse_mode: 'HTML',
+          link_preview_options: { is_disabled: true },
+          ...(view.keyboard ? { reply_markup: view.keyboard } : {}),
+        })
+        .catch(() => {})
       return
     }
 

@@ -167,10 +167,13 @@ command *with* arguments skips the card and goes straight through.
 
 A few are answered by the plugin itself, no session required: `/plugins` lists
 what is installed with a tick beside each one — tap to turn it on or off —
-while `/mcp`, `/commands`, `/history` and `/status` answer questions about the
-machine. Toggling takes effect when Claude Code next starts. Access control is
-deliberately *not* reachable this way: who may talk to the bridge is decided at
-the machine, never by something that arrived over it.
+and `/model` and `/effort` do the same for the model and the reasoning effort,
+the current value marked and the rest one tap away. `/mcp`, `/commands`,
+`/history` and `/status` answer questions about the machine. All of it is
+written to the settings file Claude Code boots from, so it takes effect when it
+next starts. Access control is deliberately *not* reachable this way: who may
+talk to the bridge is decided at the machine, never by something that arrived
+over it.
 
 **Decisions are a tap.** `ask` posts a question with buttons and blocks until
 one is pressed. `send_plan` does the same for a plan, returning approve or
