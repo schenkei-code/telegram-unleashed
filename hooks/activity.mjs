@@ -109,13 +109,26 @@ async function main() {
 
   const finished = event === 'Stop'
 
+  // The card was a view of work in progress, and the work is no longer in
+  // progress. What should stand afterwards is the answer and the closing
+  // status line — a stack of tool calls between them is scrollback nobody
+  // reads twice.
+  if (finished && st.chatId) {
+    await retire(token, st)
+    st.messageId = null
+    st.lines = []
+    st.lastBody = null
+    saveState(stateFile, st)
+    return
+  }
+
   if (!st.chatId || !st.lines.length) {
     saveState(stateFile, st)
     return
   }
 
   const now = Date.now()
-  const due = finished || now - (st.lastEdit ?? 0) >= EDIT_INTERVAL_MS
+  const due = now - (st.lastEdit ?? 0) >= EDIT_INTERVAL_MS
   if (!due) {
     saveState(stateFile, st)
     return
@@ -136,13 +149,6 @@ async function main() {
     st.messageId = sent
     st.lastBody = body
     st.lastEdit = now
-  }
-
-  // The card belongs to the turn that produced it. Once the turn ends, let it
-  // stand as a record and start the next one in its own message.
-  if (finished) {
-    st.messageId = null
-    st.lines = []
   }
   saveState(stateFile, st)
 }
@@ -460,6 +466,22 @@ function esc(s) {
 // ---------------------------------------------------------------------------
 // Telegram
 // ---------------------------------------------------------------------------
+
+/**
+ * Take the card out of the chat: the live one and anything a paragraph or a
+ * full card queued for deletion along the way. Best effort — a message the API
+ * will not remove is simply left behind rather than retried forever.
+ */
+async function retire(token, st) {
+  const root = (process.env.TELEGRAM_API_ROOT ?? 'https://api.telegram.org').replace(/\/+$/, '')
+  const base = `${root}/bot${token}`
+  const target = feedChatId(st.chatId)
+  if (!target) return
+
+  const ids = [...(st.stale ?? []), ...(st.messageId ? [st.messageId] : [])]
+  st.stale = []
+  for (const id of ids) await call(`${base}/deleteMessage`, { chat_id: target, message_id: id })
+}
 
 async function publish(token, st, body) {
   const root = (process.env.TELEGRAM_API_ROOT ?? 'https://api.telegram.org').replace(/\/+$/, '')
