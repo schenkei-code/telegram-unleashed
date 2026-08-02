@@ -129,9 +129,9 @@ export type Access = {
   /**
    * Where the status line goes when the turn happens in a group. A group is
    * an audience: the other members want the answer, not a running commentary
-   * on how it was produced. Set this to your own chat id and the status line
-   * (and the activity feed) is delivered there instead, leaving only the
-   * finished message in the group. Empty by default — status stays put.
+   * on how it was produced, so a group never gets a status line either way.
+   * Set this to your own chat id to have it (and the activity feed) delivered
+   * there instead; leave it empty and a group turn simply runs without one.
    */
   statusChatId?: string
   /**

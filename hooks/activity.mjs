@@ -298,6 +298,7 @@ async function publish(token, st, body) {
   const root = (process.env.TELEGRAM_API_ROOT ?? 'https://api.telegram.org').replace(/\/+$/, '')
   const base = `${root}/bot${token}`
   const target = feedChatId(st.chatId)
+  if (!target) return null
 
   if (st.messageId) {
     const res = await call(`${base}/editMessageText`, {
@@ -346,17 +347,18 @@ async function call(url, payload) {
 // ---------------------------------------------------------------------------
 
 /**
- * Where the feed is posted. A group turn's commentary belongs to the operator,
- * not to the group — statusChatId sends it there instead, leaving the group
- * with just the answer. Same setting the status line uses.
+ * Where the feed is posted, or null to post nothing. A group turn's commentary
+ * belongs to the operator, not to the group — statusChatId sends it there
+ * instead. Without that setting a group turn gets no feed at all, rather than
+ * one the whole group has to scroll past. Same rule as the status line.
  */
 function feedChatId(chatId) {
   if (!chatId?.startsWith('-')) return chatId
   try {
     const a = JSON.parse(readFileSync(join(STATE_DIR, 'access.json'), 'utf8'))
-    return a.statusChatId || chatId
+    return a.statusChatId || null
   } catch {
-    return chatId
+    return null
   }
 }
 

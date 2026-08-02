@@ -58,10 +58,14 @@ export function startHeartbeat(api: Api, chat_id: string): void {
   if (!p.heartbeat) return
   if (beats.has(chat_id)) return
 
-  // A group is an audience. Unless told otherwise the line stays where the
-  // turn happened; with statusChatId set it moves to the owner's chat, so the
-  // group only ever sees the finished message.
-  const redirect = chat_id.startsWith('-') && p.statusChatId && p.statusChatId !== chat_id
+  // A group never sees a status line — not a live one, not a closing one, not
+  // one that is posted and deleted again. Everyone in the group would have to
+  // read past it to reach the answer, and a message that appears and vanishes
+  // is worse than one that was never sent. With statusChatId the line moves to
+  // the operator's own chat; without it, a group turn simply has no status.
+  const isGroup = chat_id.startsWith('-')
+  const redirect = isGroup && p.statusChatId !== '' && p.statusChatId !== chat_id
+  if (isGroup && !redirect) return
 
   const beat: Beat = {
     api,
