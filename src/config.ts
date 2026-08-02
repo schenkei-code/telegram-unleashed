@@ -130,7 +130,7 @@ export type Access = {
    * waiting, rather than shipping someone else's copy in the package.
    */
   heartbeatTips?: string[]
-  /** Seconds between frames. Telegram rate-limits edits, so don't go below ~3. Default 3. */
+  /** Seconds between frames. Floor 1, but Telegram drops edits below ~3. Default 3. */
   heartbeatIntervalSec?: number
   /**
    * Leave the status line in the chat when the turn ends, rewritten to a
@@ -255,11 +255,13 @@ export function prefs(a: Access = loadAccess()) {
     heartbeatWords: a.heartbeatWords?.length ? a.heartbeatWords : HEARTBEAT_WORDS,
     heartbeatFrames: a.heartbeatFrames?.length ? a.heartbeatFrames : HEARTBEAT_FRAMES,
     heartbeatTips: a.heartbeatTips ?? [],
-    // Telegram throttles edits to a message at roughly one a second and
-    // starts dropping them past twenty a minute, so the terminal's eight
-    // frames a second is not reachable here — three seconds is as close as
-    // the platform allows while the activity card is editing too.
-    heartbeatIntervalSec: Math.max(3, a.heartbeatIntervalSec ?? 3),
+    // Telegram throttles a chat to roughly one message a second and edits
+    // count, so the terminal's eight frames a second is not reachable here.
+    // One second is the floor rather than the recommendation: the activity
+    // card edits on the same budget, and past that ceiling Telegram simply
+    // drops frames — the animation gets choppier, not faster. Three is the
+    // fastest that reliably lands.
+    heartbeatIntervalSec: Math.max(1, a.heartbeatIntervalSec ?? 3),
     heartbeatKeep: a.heartbeatKeep ?? true,
     heartbeatDoneWords: a.heartbeatDoneWords?.length ? a.heartbeatDoneWords : HEARTBEAT_DONE_WORDS,
     heartbeatDoneFrame: a.heartbeatDoneFrame ?? '✳',
