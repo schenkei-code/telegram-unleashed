@@ -37,6 +37,8 @@ const FEED_DIR = join(STATE_DIR, 'activity')
 const EDIT_INTERVAL_MS = 900
 /** Telegram's cap is 4096; leave room for the header and the trailing marker. */
 const MAX_CHARS = 3600
+/** Lines a card holds before it is retired and a fresh one takes over. */
+const MAX_LINES = 10
 /** How long a finished card stays editable before the next turn opens a new one. */
 const CARD_IDLE_MS = 90_000
 
@@ -243,8 +245,11 @@ function pushLine(st, line) {
   const prev = st.lines[st.lines.length - 1]
   // Consecutive identical entries are noise (retries, repeated reads).
   if (prev && prev.kind === line.kind && prev.text === line.text) return
+  // A long stretch of tool calls with no prose between them would otherwise
+  // grow one card past what anyone reads on a phone. Paragraphs alone are not
+  // a reliable break: a turn can run twenty tools without saying a word.
+  if (st.lines.length >= MAX_LINES) rollCard(st)
   st.lines.push(line)
-  if (st.lines.length > 60) st.lines = st.lines.slice(-60)
 }
 
 /** One compact line describing a tool call. */
