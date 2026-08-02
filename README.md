@@ -1,8 +1,6 @@
 <div align="center">
 
-**hunch** · intentional agent
-
-# telegram-unleashed
+<img src="assets/banner.png" alt="telegram-unleashed — your agent, in your pocket" width="820">
 
 ### Your agent, in your pocket — and it types back.
 
@@ -10,6 +8,11 @@ Telegram channel for Claude Code, rebuilt on Bot API 10.x.
 Answers that write themselves out word by word. An activity feed that shows the
 work as it happens. Formatting that never breaks, files that behave like files,
 and decisions you settle with a thumb.
+
+[![version](https://img.shields.io/badge/version-1.2.0-ff8a1e?style=flat-square&labelColor=0f0f12)](https://github.com/schenkei-code/telegram-unleashed/releases)
+[![runtime](https://img.shields.io/badge/bun-no%20build%20step-ffb43e?style=flat-square&labelColor=0f0f12)](https://bun.sh)
+[![Bot API](https://img.shields.io/badge/Bot%20API-10.x-ffd24a?style=flat-square&labelColor=0f0f12)](https://core.telegram.org/bots/api)
+[![license](https://img.shields.io/badge/license-Apache--2.0-9c8657?style=flat-square&labelColor=0f0f12)](LICENSE)
 
 </div>
 
@@ -300,7 +303,7 @@ and that changes are stated, which `NOTICE` does.
 
 <div align="center">
 
-**hunch** · intentional agent
+<img src="assets/hunch.png" alt="hunch · intentional agent" width="380">
 
 *Agents that act on purpose, not on prompt.*
 
