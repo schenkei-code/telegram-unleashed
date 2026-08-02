@@ -1,0 +1,11 @@
+{
+  "name": "hunch",
+  "owner": { "name": "hunch intentional agent" },
+  "plugins": [
+    {
+      "name": "telegram-unleashed",
+      "source": "./",
+      "description": "Telegram channel for Claude Code, unleashed. Live-streaming answers, a persistent activity indicator, automatic Markdown formatting that never breaks code blocks, albums and 2 GB uploads, and permissions, plans and questions answered by tapping a button."
+    }
+  ]
+}

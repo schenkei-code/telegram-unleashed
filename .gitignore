@@ -1,0 +1,4 @@
+node_modules/
+*.log
+CLAUDE.md
+**/CLAUDE.md
