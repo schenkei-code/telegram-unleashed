@@ -49,7 +49,7 @@ import {
 } from './interactive.js'
 import { TOOL_DEFS, callTool } from './tools.js'
 import { record as recordHistory } from './history.js'
-import { handleCommand, resolveSlug, publishMenu, togglePlugin, setRestartHandler } from './commands.js'
+import { handleCommand, resolveSlug, publishMenu, togglePlugin } from './commands.js'
 import { markdownToHtml, chunkHtml } from './format.js'
 
 if (!TOKEN) {
@@ -203,10 +203,6 @@ function shutdown(): void {
   setTimeout(() => process.exit(0), 2000)
   void Promise.resolve(bot.stop()).finally(() => process.exit(0))
 }
-// /reload restarts the bridge from the chat; the supervisor that spawned it
-// brings it back with whatever the plugin has changed to since.
-setRestartHandler(shutdown)
-
 process.stdin.on('end', shutdown)
 process.stdin.on('close', shutdown)
 process.on('SIGTERM', shutdown)
