@@ -39,7 +39,7 @@ import {
   setBotUsername,
   startApprovalWatcher,
 } from './access.js'
-import { limitsSummary } from './files.js'
+import { limitsSummary, rememberAttachment } from './files.js'
 import { startTyping, stopTyping, stopAllTyping } from './stream.js'
 import { startHeartbeat, stopAllHeartbeats } from './status.js'
 import {
@@ -102,7 +102,7 @@ const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
 // ---------------------------------------------------------------------------
 
 const mcp = new Server(
-  { name: 'telegram-unleashed', version: '1.2.0' },
+  { name: 'telegram-unleashed', version: '1.3.0' },
   {
     capabilities: {
       tools: {},
@@ -414,6 +414,15 @@ function relay(
   },
 ): void {
   const { attachment, ...rest } = meta
+  // Big files force download_attachment onto the MTProto fallback, and the
+  // fallback re-finds the file by chat + size — file_ids don't cross APIs.
+  if (attachment) {
+    rememberAttachment(attachment.file_id, {
+      chat_id,
+      size: attachment.size,
+      name: attachment.name,
+    })
+  }
   void mcp
     .notification({
       method: 'notifications/claude/channel',

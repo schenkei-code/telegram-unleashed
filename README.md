@@ -291,6 +291,21 @@ The end-to-end test spawns the server over stdio exactly as Claude Code does,
 verifies the guard rails reject a non-allowlisted chat and refuse to attach
 channel state, and sends real messages.
 
+## Files past 20 MB
+
+Telegram caps **bot** downloads at 20 MB. When someone sends the bridge a
+bigger file, `download_attachment` falls back to the user's **own Telegram
+account** (MTProto via Telethon) — no size cap, one-time setup.
+
+Run the `account` skill for the guided setup: it walks through creating API
+credentials at my.telegram.org, a one-time interactive login in your own
+terminal, and four lines in the channel `.env`. The session file stays in the
+channel state directory, outside the repo, and the fallback only ever
+downloads attachments the bridge already received — it sends nothing.
+
+Alternative for both directions (up to 2 GB): a self-hosted Bot API server
+via `TELEGRAM_API_ROOT`.
+
 ## License
 
 Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE](NOTICE).

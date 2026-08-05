@@ -17,7 +17,9 @@
 import type { Bot } from 'grammy'
 import { InputFile } from 'grammy'
 import { statSync, mkdirSync, writeFileSync } from 'fs'
-import { extname, basename, join } from 'path'
+import { extname, basename, join, dirname } from 'path'
+import { fileURLToPath } from 'url'
+import { spawn } from 'child_process'
 import {
   API_ROOT,
   INBOX_DIR,
@@ -167,19 +169,49 @@ export async function sendFiles(
 }
 
 /**
+ * What the bridge knows about an inbound attachment beyond its file_id.
+ * Bot-API file_ids mean nothing to MTProto, so the fallback needs the chat
+ * and the size to find the same file again from the user-account side.
+ */
+export type AttachmentOrigin = { chat_id: string; size?: number; name?: string }
+
+const origins = new Map<string, AttachmentOrigin>()
+
+/** Remember where an inbound attachment came from, for the MTProto fallback. */
+export function rememberAttachment(file_id: string, origin: AttachmentOrigin): void {
+  origins.set(file_id, origin)
+  // The map only has to survive the gap between "message arrived" and "agent
+  // asks for the file" — a small window; cap it so it can never grow into a leak.
+  if (origins.size > 200) {
+    const oldest = origins.keys().next().value
+    if (oldest !== undefined) origins.delete(oldest)
+  }
+}
+
+/**
  * Download an attachment into the inbox and return its local path.
  * With a local Bot API server the file is already on disk and getFile returns
  * an absolute path — no HTTP round trip, no size ceiling.
+ *
+ * Files past the Bot-API cap (20 MB cloud) fall back to the user's MTProto
+ * session when one is configured — see mtprotoFetch.
  */
 export async function downloadAttachment(api: Api, file_id: string): Promise<string> {
-  const file = await api.getFile(file_id)
+  let file
+  try {
+    file = await api.getFile(file_id)
+  } catch (err) {
+    // The cloud API refuses getFile outright for big files — the size never
+    // even reaches the check below.
+    if (/file is too big/i.test(String((err as any)?.description ?? err))) {
+      return await mtprotoFetch(api, file_id)
+    }
+    throw err
+  }
   if (!file.file_path) throw new Error('Telegram returned no file_path — the file may have expired')
 
   if (file.file_size != null && file.file_size > MAX_DOWNLOAD_BYTES) {
-    throw new Error(
-      `attachment is ${humanSize(file.file_size)}; Telegram caps bot downloads at ${humanSize(MAX_DOWNLOAD_BYTES)} — ` +
-        `run a local Bot API server (TELEGRAM_API_ROOT) to lift the limit`,
-    )
+    return await mtprotoFetch(api, file_id)
   }
 
   mkdirSync(INBOX_DIR, { recursive: true })
@@ -200,6 +232,74 @@ export async function downloadAttachment(api: Api, file_id: string): Promise<str
   if (!res.ok) throw new Error(`download failed: HTTP ${res.status}`)
   writeFileSync(dest, Buffer.from(await res.arrayBuffer()))
   return dest
+}
+
+/**
+ * Fetch a file the Bot API will not serve, over the user's own MTProto login.
+ *
+ * A user account has no 20-MB download cap. The helper script opens the
+ * configured Telethon session, finds the newest media in the same chat whose
+ * size (and name) match, and downloads it. Needs one-time setup — see the
+ * account skill; without it this stays a clear error instead of a mystery.
+ */
+async function mtprotoFetch(api: Api, file_id: string): Promise<string> {
+  const session = process.env.TELEGRAM_MTPROTO_SESSION
+  const apiId = process.env.TELEGRAM_MTPROTO_API_ID
+  const apiHash = process.env.TELEGRAM_MTPROTO_API_HASH
+  const origin = origins.get(file_id)
+
+  if (!session || !apiId || !apiHash) {
+    throw new Error(
+      `attachment exceeds Telegram's bot download cap (${humanSize(MAX_DOWNLOAD_BYTES)}) and no MTProto fallback is configured — ` +
+        `set TELEGRAM_MTPROTO_SESSION / _API_ID / _API_HASH in the channel .env (see the account skill), ` +
+        `or run a local Bot API server (TELEGRAM_API_ROOT)`,
+    )
+  }
+  if (!origin?.size) {
+    throw new Error('attachment is too big for the Bot API and its origin is unknown — ask the sender to resend it')
+  }
+
+  // The user account sees a private chat with the bridge as a dialog with the
+  // BOT; groups keep their id. origin.chat_id is the bot's view of the chat —
+  // for a DM that is the human's id, which the user session cannot dial.
+  const me = await api.getMe()
+  const entity = origin.chat_id.startsWith('-') ? origin.chat_id : `@${me.username}`
+
+  mkdirSync(INBOX_DIR, { recursive: true })
+  const py = process.env.TELEGRAM_MTPROTO_PYTHON || 'python'
+  const script = join(dirname(fileURLToPath(import.meta.url)), '..', 'scripts', 'mtproto_fetch.py')
+  const args = [
+    script,
+    '--session', session,
+    '--api-id', apiId,
+    '--api-hash', apiHash,
+    '--entity', entity,
+    '--size', String(origin.size),
+    '--out', INBOX_DIR,
+  ]
+  if (origin.name) args.push('--name', origin.name)
+
+  return await new Promise<string>((resolve, reject) => {
+    const child = spawn(py, args, { shell: false, windowsHide: true })
+    let out = ''
+    let errText = ''
+    const timer = setTimeout(() => child.kill(), 10 * 60 * 1000)
+    child.stdout.on('data', (c) => (out += c))
+    child.stderr.on('data', (c) => (errText += c))
+    child.on('error', (err) => {
+      clearTimeout(timer)
+      reject(new Error(`MTProto fallback could not start ${py}: ${err.message}`))
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      const path = out.trim().split('\n').pop()?.trim()
+      if (code !== 0 || !path) {
+        reject(new Error(`MTProto fallback failed: ${(errText || out).trim().slice(-300) || `exit ${code}`}`))
+        return
+      }
+      resolve(path)
+    })
+  })
 }
 
 /** Describe the active limits, for the /status command and diagnostics. */
