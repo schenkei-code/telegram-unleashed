@@ -110,6 +110,92 @@ answers.
 > official `telegram` plugin on the same token produces a permanent 409 —
 > disable one, or give each its own bot.
 
+## Per platform
+
+The plugin itself is identical everywhere; what differs is where state lives,
+how you install bun, and how you make the channel flag stick.
+
+### macOS / Linux
+
+```bash
+curl -fsSL https://bun.sh/install | bash          # if bun is missing
+mkdir -p ~/.claude/channels/telegram
+echo 'TELEGRAM_BOT_TOKEN=123456789:AAH...' > ~/.claude/channels/telegram/.env
+chmod 600 ~/.claude/channels/telegram/.env
+```
+
+State: `~/.claude/channels/telegram/`.
+
+To avoid typing the flag every time, put a function in `~/.zshrc` (macOS
+default) or `~/.bashrc` (most Linux shells):
+
+```bash
+telegram-unleashed() {
+  command claude --dangerously-load-development-channels plugin:telegram-unleashed@hunch "$@"
+}
+```
+
+If you want the bare `claude` to carry the channel, guard it so only the
+argument-less call is affected — otherwise `claude -p …`, `claude plugin list`
+and every scripted call would hit the full-screen confirmation dialog with
+nobody there to answer it, and hang:
+
+```bash
+claude() {
+  if [ $# -eq 0 ]; then
+    telegram-unleashed
+  else
+    command claude "$@"
+  fi
+}
+```
+
+### Windows
+
+```powershell
+powershell -c "irm bun.sh/install.ps1|iex"        # if bun is missing
+mkdir "$env:USERPROFILE\.claude\channels\telegram" -Force
+'TELEGRAM_BOT_TOKEN=123456789:AAH...' | Set-Content "$env:USERPROFILE\.claude\channels\telegram\.env"
+```
+
+State: `%USERPROFILE%\.claude\channels\telegram\`.
+
+The equivalent shortcut goes in your PowerShell profile (`notepad $PROFILE`):
+
+```powershell
+function telegram-unleashed {
+  claude --dangerously-load-development-channels plugin:telegram-unleashed@hunch @args
+}
+```
+
+**One caveat specific to Windows:** the takeover that hands the bot token to
+your newest session is POSIX-only — it reads the process table through `ps` and
+resolves working directories through `lsof` or `/proc`, none of which exist
+there, so it is skipped entirely. Everything else works; what you lose is the
+automatic cleanup when a previous session leaves a poller behind. If inbound
+messages stop and the trace log fills with `409 Conflict`, end the stale
+process by hand:
+
+```powershell
+Get-CimInstance Win32_Process -Filter "Name = 'bun.exe'" |
+  Where-Object CommandLine -like '*telegram-unleashed*' |
+  ForEach-Object { Stop-Process -Id $_.ProcessId -Force }
+```
+
+### Developing against a local clone
+
+On any platform you can point the marketplace at a working copy instead of
+GitHub, so edits take effect without reinstalling:
+
+```bash
+claude plugin marketplace add /absolute/path/to/telegram-unleashed
+claude plugin install telegram-unleashed@hunch
+```
+
+Use an absolute path — a `~` is not expanded here and fails with `ENOENT`. Note
+that swapping an existing marketplace drops the plugin from `enabledPlugins`,
+which is why the install line follows.
+
 ## What it does differently
 
 **The activity indicator survives.** Telegram clears a chat action after about
@@ -332,6 +418,54 @@ downloads attachments the bridge already received — it sends nothing.
 
 Alternative for both directions (up to 2 GB): a self-hosted Bot API server
 via `TELEGRAM_API_ROOT`.
+
+## When nothing arrives
+
+Outbound working while inbound stays silent is the normal failure, and it has
+three usual causes. Diagnose in this order — each step rules out one layer.
+
+**1. `~/.claude/channels/telegram/trace.log`** — did the message reach the
+bridge at all?
+
+| What you see | What it means |
+|---|---|
+| nothing at all | Telegram never handed it over. Check the next line down. |
+| `409 Conflict, retrying in …` | Another poller holds the token. See below. |
+| `gate -> drop` | The sender is not on the allowlist. Pair again. |
+| `gate -> deliver` and `relayed msg=…` | The bridge did its job — the session is the problem. |
+
+**2. The session** — if the trace says `relayed` and still nothing appears, the
+session never asked for the channel. The MCP log under
+`~/Library/Caches/claude-cli-nodejs/<project>/mcp-logs-plugin-telegram-unleashed-telegram-unleashed/`
+(on Windows, `%LOCALAPPDATA%\claude-cli-nodejs\…`) says so outright:
+`Channel notifications skipped: server … not in --channels list for this
+session`. Restart with the development flag from
+[step 5](#5-start-claude-code-with-the-channel-attached), and check the flag is
+not paired with `--channels`.
+
+**3. A stale poller** — `409 Conflict` in a loop means a second process is
+polling the same token. Usually it is a session you closed whose bot outlived
+it. Since 1.4.0 a starting bot clears these itself, including the hard case: a
+poller whose parent died is reparented to init and its command line is a bare
+`bun run src/index.ts`, so it is found by matching its working directory rather
+than its name, and killed outright if it ignores SIGTERM. To look yourself:
+
+```bash
+ps -axo pid=,ppid=,command= | grep '[s]rc/index.ts'
+lsof -a -p <pid> -d cwd -Fn        # confirm it is this plugin
+```
+
+**Rate limits.** `Too Many Requests: retry after <n>` — **`n` is seconds, not
+milliseconds.** A four-digit value is hours, not a moment; resending against it
+only extends the block. Competing pollers are the usual cause: each restart
+republishes the command menu, and Telegram counts that series as flooding. Since
+1.4.0 the menu is published once per process and the backoff only resets after a
+connection has held for 30 seconds, so an eviction no longer reads as a
+successful start.
+
+**Never call `getUpdates` on a bot whose bridge is running.** Telegram delivers
+each update once, so a diagnostic poll steals messages from the plugin and
+breaks its connection. Use a separate test bot.
 
 ## License
 
