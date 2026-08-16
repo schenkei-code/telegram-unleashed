@@ -186,6 +186,19 @@ export type Access = {
    * was already said. Telegram itself exposes no history. Default true.
    */
   history?: boolean
+  /**
+   * Shape of the activity feed (`hooks/activity.mjs`).
+   *
+   * 'live' treats it as a view: a new paragraph replaces the card before it and
+   * the whole feed leaves the chat when the turn ends, so what stands
+   * afterwards is the answer alone. 'mirror' treats it as scrollback: nothing
+   * is deleted and thinking is shown, for when the chat *is* the terminal
+   * rather than a window onto one. Default 'live'.
+   *
+   * Read by the hook, which is a separate process per event — a change here
+   * takes effect on the next event, with no restart.
+   */
+  feedMode?: 'live' | 'mirror'
 }
 
 const HEARTBEAT_WORDS = ['Pondering', 'Twisting', 'Musing', 'Digging', 'Untangling', 'Brewing']

@@ -9,7 +9,7 @@ Antworten, die sich selbst schreiben. Ein Aktivitätsverlauf, der die Arbeit
 zeigt, während sie passiert. Formatierung, die nicht zerbricht, Dateien, die
 sich wie Dateien verhalten, und Entscheidungen, die ein Daumen erledigt.
 
-[![Version](https://img.shields.io/badge/version-1.5.0-ff8a1e?style=flat-square&labelColor=0f0f12)](https://github.com/schenkei-code/telegram-unleashed/releases)
+[![Version](https://img.shields.io/badge/version-1.6.0-ff8a1e?style=flat-square&labelColor=0f0f12)](https://github.com/schenkei-code/telegram-unleashed/releases)
 [![Laufzeit](https://img.shields.io/badge/bun-ohne%20Build--Schritt-ffb43e?style=flat-square&labelColor=0f0f12)](https://bun.sh)
 [![Bot API](https://img.shields.io/badge/Bot%20API-10.x-ffd24a?style=flat-square&labelColor=0f0f12)](https://core.telegram.org/bots/api)
 [![Lizenz](https://img.shields.io/badge/license-Apache--2.0-9c8657?style=flat-square&labelColor=0f0f12)](LICENSE)
@@ -381,7 +381,11 @@ Arbeit bleiben still. Updates sind gedrosselt, Benachrichtigungen unterdrückt,
 und jeder Fehlerpfad endet mit 0: Ein kaputter Verlauf darf den Zug nie
 kaputtmachen.
 
-Zwei Modi, gesetzt als `feedMode` in `access.json`:
+Zwei Modi. Umschalten geht aus dem Chat heraus mit `/feed` — die Karte hat einen
+Knopf je Modus, und `/feed off` / `/feed on` sind die getippte Kurzform für
+beide. Der Hook ist pro Ereignis ein eigener Prozess, eine Änderung greift also
+beim nächsten Schritt, ohne Neustart. Der Wert steht als `feedMode` in
+`access.json`:
 
 | Modus | Bedeutung |
 |---|---|

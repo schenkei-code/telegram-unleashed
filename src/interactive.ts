@@ -269,8 +269,8 @@ export function registerCallbacks(bot: Bot, emitPermission: PermissionEmitter, r
       return
     }
 
-    // ---- model and effort pickers ----
-    const setting = /^(model|effort):(\d{1,3})$/.exec(data)
+    // ---- model, effort and feed pickers ----
+    const setting = /^(model|effort|feed):(\d{1,3})$/.exec(data)
     if (setting) {
       const { view, note } = chooseSetting(setting[1], Number(setting[2]))
       await ctx.answerCallbackQuery({ text: note }).catch(() => {})

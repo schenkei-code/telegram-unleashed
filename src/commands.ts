@@ -33,7 +33,7 @@ import {
 } from './control.js'
 import { read as readHistory, format as formatHistory } from './history.js'
 import { draftSupport } from './stream.js'
-import { CHANNEL } from './config.js'
+import { CHANNEL, STATIC, loadAccess, saveAccess, type Access } from './config.js'
 
 /** Telegram's rule: 1-32 chars, lowercase letters, digits and underscores. */
 function slug(name: string): string {
@@ -49,6 +49,7 @@ const NATIVE: { name: string; description: string }[] = [
   { name: 'commands', description: 'List every skill and command available' },
   { name: 'model', description: 'Model — tap to switch' },
   { name: 'effort', description: 'Reasoning effort — tap to switch' },
+  { name: 'feed', description: 'Activity feed — live view or kept scrollback' },
   { name: 'plugins', description: 'Plugins — tap to turn on or off' },
   { name: 'mcp', description: 'MCP servers currently configured' },
   { name: 'history', description: 'Recent messages in this chat' },
@@ -161,17 +162,28 @@ export async function handleCommand(text: string, chat_id: string): Promise<Hand
     }
 
     case 'model':
-    case 'effort': {
-      const field = name === 'model' ? MODEL_FIELD : EFFORT_FIELD
+    case 'effort':
+    case 'feed': {
+      const field = name === 'model' ? MODEL_FIELD : name === 'effort' ? EFFORT_FIELD : FEED_FIELD
       // Typed with a value it is a direct set; tapped from the menu it opens
       // the picker, since a menu entry carries no argument.
       if (arg.trim()) {
         const wanted = arg.trim().toLowerCase()
-        const choice = field.choices.find((c) => c.value === wanted || c.label.toLowerCase() === wanted)
+        // `off` and `on` are what anyone types at a feature they want gone or
+        // back, and neither is a mode name. Rather than answer "unknown" to the
+        // obvious word, the feed reads them as its two modes. Only the feed:
+        // there is no sense in which a model is off.
+        const spoken =
+          field !== FEED_FIELD ? wanted : wanted === 'off' ? 'live' : wanted === 'on' ? 'mirror' : wanted
+        const choice = field.choices.find((c) => c.value === spoken || c.label.toLowerCase() === spoken)
         if (!choice) {
           return { text: `Unknown ${field.noun}: \`${arg.trim()}\`\n\n${field.choices.map((c) => c.value).join(', ')}` }
         }
-        setSetting(field.key, choice.value)
+        try {
+          setField(field, choice.value)
+        } catch (err) {
+          return { text: err instanceof Error ? err.message : String(err) }
+        }
       }
       return choiceView(field)
     }
@@ -195,6 +207,7 @@ export async function handleCommand(text: string, chat_id: string): Promise<Hand
           `channel: ${CHANNEL}`,
           `model: ${getSetting('model') ?? 'unset'}`,
           `effort: ${getSetting('effortLevel') ?? 'unset'}`,
+          `feed: ${fieldValue(FEED_FIELD) ?? 'live'}`,
           `streaming: ${draftSupport() === 'no' ? 'edit fallback' : 'rich drafts'}`,
           `plugins: ${plugins.filter((p) => p.enabled).length} on / ${plugins.length} known`,
           `mcp servers: ${listMcp().length}`,
@@ -257,15 +270,66 @@ export function resolveRun(payload: string): string | null {
 // Model and effort pickers
 // ---------------------------------------------------------------------------
 
-type Field = { key: string; noun: string; title: string; prefix: string; choices: Choice[] }
+/**
+ * `store` says which file the value lives in. Model and effort belong to Claude
+ * Code and are read from its settings; the feed belongs to this channel and is
+ * read straight out of access.json by a hook that is a separate process — which
+ * is why that one needs no restart and the other two do.
+ */
+type Field = {
+  key: string
+  noun: string
+  title: string
+  prefix: string
+  choices: Choice[]
+  store?: 'settings' | 'access'
+  /** What to say under the buttons about when the change bites. */
+  effect?: string
+}
 
 const MODEL_FIELD: Field = { key: 'model', noun: 'model', title: 'Model', prefix: 'model', choices: MODELS }
 const EFFORT_FIELD: Field = { key: 'effortLevel', noun: 'effort level', title: 'Reasoning effort', prefix: 'effort', choices: EFFORTS }
 
-const FIELDS: Record<string, Field> = { model: MODEL_FIELD, effort: EFFORT_FIELD }
+const FEED_MODES: Choice[] = [
+  { value: 'live', label: 'live' },
+  { value: 'mirror', label: 'mirror' },
+]
+const FEED_FIELD: Field = {
+  key: 'feedMode',
+  noun: 'feed mode',
+  title: 'Activity feed',
+  prefix: 'feed',
+  choices: FEED_MODES,
+  store: 'access',
+  effect: 'Tap to switch. Takes effect on the next step — no restart.',
+}
+
+const FIELDS: Record<string, Field> = { model: MODEL_FIELD, effort: EFFORT_FIELD, feed: FEED_FIELD }
+
+/** Current value of a field, from whichever file backs it. */
+function fieldValue(field: Field): string | null {
+  if (field.store !== 'access') return getSetting(field.key)
+  const value = (loadAccess() as Record<string, unknown>)[field.key]
+  return typeof value === 'string' ? value : null
+}
+
+/** Write a field back, returning false when it already had that value. */
+function setField(field: Field, value: string): boolean {
+  if (fieldValue(field) === value) return false
+  if (field.store !== 'access') return setSetting(field.key, value)
+
+  // Static mode makes saveAccess a no-op. Saying "changed" after a write that
+  // was dropped is the one answer worse than refusing.
+  if (STATIC) throw new Error('Static mode — access.json is read-only.')
+
+  const access = loadAccess() as Record<string, unknown>
+  access[field.key] = value
+  saveAccess(access as Access)
+  return true
+}
 
 function choiceView(field: Field): Handled {
-  const current = getSetting(field.key)
+  const current = fieldValue(field)
   const keyboard = new InlineKeyboard()
   field.choices.forEach((c, i) => {
     if (i > 0 && i % 2 === 0) keyboard.row()
@@ -280,7 +344,7 @@ function choiceView(field: Field): Handled {
     text: [
       `*${field.title}* — \`${shown}\`${current && !known ? ' _(not in this list)_' : ''}`,
       '',
-      'Tap to switch. Takes effect after a restart.',
+      field.effect ?? 'Tap to switch. Takes effect after a restart.',
     ].join('\n'),
     keyboard,
   }
@@ -295,7 +359,7 @@ export function chooseSetting(prefix: string, index: number): { view: Handled; n
   if (!choice) return { view: choiceView(field), note: 'Stale — reopened.' }
 
   try {
-    const changed = setSetting(field.key, choice.value)
+    const changed = setField(field, choice.value)
     return { view: choiceView(field), note: changed ? `${field.noun}: ${choice.value}` : 'Already set.' }
   } catch (err) {
     return { view: choiceView(field), note: err instanceof Error ? err.message : String(err) }

@@ -374,7 +374,7 @@ function toolLine(name, input) {
   // Sending to Telegram is what produces this feed; echoing it is a loop.
   if (/telegram-unleashed/.test(name)) return null
 
-  const short = name.replace(/^mcp__[^_]*__/, '').replace(/^mcp__/, '')
+  const short = toolName(name)
   // The whole path, as the terminal prints it. A monospace block scrolls
   // sideways instead of wrapping, so a long line costs a swipe, not the layout.
   const file = (p) => (typeof p === 'string' ? p : '')
@@ -413,10 +413,56 @@ function toolLine(name, input) {
     case 'Skill':
       return call(input.skill ?? '')
     case 'ToolSearch':
-      return null
+      // In live mode this is plumbing — the agent fetching a schema is not the
+      // work. A mirror shows it, because the terminal does.
+      return MIRROR ? call(clip(input.query ?? '', 60)) : null
     default:
-      return call('')
+      // Everything else: an MCP tool, a plugin's own tool, something newer than
+      // this switch. `call('')` would print a bare name with empty brackets and
+      // throw away the one field that says what it was for, so guess the
+      // argument the way the cases above pick theirs.
+      return call(guessArg(input))
   }
+}
+
+/**
+ * Tool identifiers with the MCP scaffolding taken off.
+ *
+ * `mcp__<server>__<tool>` is the documented shape, but a server name may itself
+ * carry underscores — `mcp__claude_ai_Gmail__search_threads` — and a pattern
+ * anchored on single underscores leaves the whole prefix behind. Splitting on
+ * the double underscore is what actually holds: the last field is the tool, the
+ * one before it the server, and the server is worth keeping because `Gmail ·
+ * search_threads` says where the call went and `search_threads` alone does not.
+ */
+function toolName(name) {
+  if (!name.startsWith('mcp__')) return name
+  const parts = name.slice(5).split('__').filter(Boolean)
+  if (parts.length < 2) return parts[0] ?? name
+  const tool = parts[parts.length - 1]
+  // Server names arrive prefixed by their origin (`claude_ai_Gmail`,
+  // `plugin_claude-mem_mcp-search`); the tail is the part anyone recognises.
+  const server = parts[parts.length - 2].split('_').filter(Boolean).pop()
+  return server ? `${server} · ${tool}` : tool
+}
+
+/**
+ * The field of an unknown tool's input most likely to identify the call.
+ *
+ * Ordered by how specific each name usually is, then falling back to the first
+ * short string in the object — for a tool this hook has never heard of, some
+ * argument beats none.
+ */
+function guessArg(input) {
+  if (!input || typeof input !== 'object') return ''
+  const named = ['query', 'prompt', 'description', 'path', 'file_path', 'url', 'name', 'id', 'text', 'message']
+  for (const key of named) {
+    if (typeof input[key] === 'string' && input[key].trim()) return clip(input[key], 70)
+  }
+  for (const value of Object.values(input)) {
+    if (typeof value === 'string' && value.trim() && value.length <= 200) return clip(value, 70)
+  }
+  return ''
 }
 
 /**
