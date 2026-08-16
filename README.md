@@ -244,6 +244,7 @@ API credentials come from https://my.telegram.org.
 | `askTimeoutSec` | `900` | How long `ask`/`send_plan` wait |
 | `collapseOver` | `0` | Auto-collapse messages longer than N chars (0 = off) |
 | `history` | `true` | Keep a local log of every message in and out |
+| `feedMode` | `live` | Activity feed shape: `live` (a view, deleted when done) \| `mirror` (scrollback, kept) |
 
 ## Live activity feed
 
@@ -267,6 +268,17 @@ inbound channel tag in the transcript, so a session nobody messaged writes
 nothing at all — cron jobs and local work stay silent. Updates are throttled,
 notifications are suppressed, and every failure path exits 0: a broken feed must
 never break the turn.
+
+Two modes, set as `feedMode` in `access.json`:
+
+| Mode | Meaning |
+|---|---|
+| `live` (default) | The feed is a view. A new paragraph replaces the card before it, and the whole feed is deleted when the turn ends — what stands afterwards is the answer alone. |
+| `mirror` | The feed is scrollback, the way a terminal is scrollback. Nothing is deleted, thinking is shown, and a full card is left standing while the next opens below it. For driving a session from the phone, where the chat has to *be* the terminal rather than preview it. |
+
+Mirror mode does not print tool output in full, because the terminal does not
+either — it collapses a long result and shows the first few lines. Mirroring
+that collapse is what makes the two views match.
 
 ## Not included
 

@@ -9,9 +9,24 @@
  * keeps one Telegram message in sync with it — the user watches the work
  * happen instead of waiting for the summary.
  *
- * The card is a view, not a log: every new assistant paragraph deletes the
- * previous card and opens a fresh one, so what stands in the chat is the work
- * belonging to the paragraph being written rather than the whole turn.
+ * Two modes, set as `feedMode` in access.json:
+ *
+ *   live   (default) — the card is a view, not a log: every new assistant
+ *          paragraph deletes the previous card and opens a fresh one, and the
+ *          whole feed is taken out of the chat when the turn ends. What stands
+ *          afterwards is the answer alone.
+ *
+ *   mirror — the card is scrollback, the way a terminal is scrollback. Nothing
+ *          is ever deleted, thinking is shown, and a full card is left standing
+ *          while the next one opens beneath it. For driving a session from the
+ *          phone, where the chat has to be the terminal rather than a preview
+ *          of it.
+ *
+ * Note what mirror does NOT do: print tool output in full. The terminal does
+ * not either — it collapses a long result behind ctrl+o and shows the first
+ * few lines. Mirroring that collapse is what makes the two views match; a
+ * `Read` of a thousand-line file printed whole is something the terminal never
+ * showed in the first place.
  *
  * Wired to PreToolUse / PostToolUse / UserPromptSubmit / Stop. Each event is a
  * fresh process, so all state lives on disk next to the channel credentials.
@@ -54,6 +69,30 @@ const MAX_LINES = 6
 const RESULT_LINES = 4
 /** How long a finished card stays editable before the next turn opens a new one. */
 const CARD_IDLE_MS = 90_000
+
+/**
+ * Mirror mode: the feed is scrollback rather than a live view.
+ *
+ * Read once per process — every hook event is its own process, so this is a
+ * single stat per event and always reflects the file as it stands.
+ */
+const MIRROR = readAccess().feedMode === 'mirror'
+/**
+ * A mirrored card may stand a little taller: nothing above it will be deleted,
+ * so the cost of a card is one message rather than a message that replaces
+ * what came before. Still bounded — a card past this reads as a wall.
+ */
+const MIRROR_MAX_LINES = 12
+/** Thinking, clipped to what a phone will scroll through without complaint. */
+const THINKING_CHARS = 700
+
+function readAccess() {
+  try {
+    return JSON.parse(readFileSync(join(STATE_DIR, 'access.json'), 'utf8'))
+  } catch {
+    return {}
+  }
+}
 
 main().catch(() => process.exit(0))
 
@@ -113,8 +152,27 @@ async function main() {
   // progress. What should stand afterwards is the answer and the closing
   // status line — a stack of tool calls between them is scrollback nobody
   // reads twice.
-  if (finished && st.chatId) {
+  if (finished && st.chatId && !MIRROR) {
     await retire(token, st)
+    st.messageId = null
+    st.lines = []
+    st.lastBody = null
+    saveState(stateFile, st)
+    return
+  }
+
+  // Mirror mode ends the turn the other way round: whatever the rate limit held
+  // back gets one last publish, unthrottled, so the scrollback is complete
+  // rather than missing its final steps. Then the card is closed — the next
+  // turn opens its own instead of editing this one.
+  if (finished && st.chatId) {
+    if (st.lines?.length) {
+      const body = render(st)
+      if (body !== st.lastBody) {
+        const sent = await publish(token, st, body)
+        if (sent) st.messageId = sent
+      }
+    }
     st.messageId = null
     st.lines = []
     st.lastBody = null
@@ -230,7 +288,14 @@ function ingest(st, entry) {
 
   if (!Array.isArray(msg.content)) return
   for (const block of msg.content) {
-    // Thinking stays private; tool_use is already covered by PreToolUse.
+    // Thinking is on screen in the terminal, so a mirror shows it too. In live
+    // mode it stays out: that feed exists to say what is happening, and
+    // reasoning is not that. tool_use is already covered by PreToolUse.
+    if (MIRROR && block?.type === 'thinking' && block.thinking?.trim()) {
+      rollCard(st)
+      pushLine(st, { kind: 'thinking', text: clip(block.thinking.trim(), THINKING_CHARS) })
+      continue
+    }
     if (block?.type === 'text' && block.text?.trim()) {
       // A new paragraph closes the card that came before it. Without this the
       // card grows for the whole turn and ends up a wall of tool lines nobody
@@ -248,7 +313,12 @@ function ingest(st, entry) {
  */
 function rollCard(st) {
   if (!st.lines?.length) return
-  if (st.messageId) {
+  // In mirror mode the finished card is left standing and the next one opens
+  // below it. That is the whole difference between a view and scrollback:
+  // dropping `messageId` without queueing it for deletion means the next
+  // publish sends rather than edits, and nothing that was on screen is taken
+  // back off it.
+  if (st.messageId && !MIRROR) {
     st.stale = st.stale ?? []
     st.stale.push(st.messageId)
   }
@@ -290,7 +360,7 @@ function pushLine(st, line) {
   // A long stretch of tool calls with no prose between them would otherwise
   // grow one card past what anyone reads on a phone. Paragraphs alone are not
   // a reliable break: a turn can run twenty tools without saying a word.
-  if (st.lines.length >= MAX_LINES) rollCard(st)
+  if (st.lines.length >= (MIRROR ? MIRROR_MAX_LINES : MAX_LINES)) rollCard(st)
   st.lines.push(line)
 }
 
@@ -445,6 +515,12 @@ function render(st) {
       parts.push(`● ${line.text}`)
       continue
     }
+    // The terminal's own marker for reasoning, so the eye sorts it from prose
+    // without reading a word of it.
+    if (line.kind === 'thinking') {
+      parts.push(`✻ ${line.text}`)
+      continue
+    }
     // A multi-line command keeps its shape, its continuation lines indented
     // under the call the way the terminal lays them out.
     const arg = line.arg ? `(${line.arg.split('\n').join('\n  ')})` : ''
@@ -552,12 +628,7 @@ async function call(url, payload) {
  */
 function feedChatId(chatId) {
   if (!chatId?.startsWith('-')) return chatId
-  try {
-    const a = JSON.parse(readFileSync(join(STATE_DIR, 'access.json'), 'utf8'))
-    return a.statusChatId || null
-  } catch {
-    return null
-  }
+  return readAccess().statusChatId || null
 }
 
 function loadToken() {

@@ -312,7 +312,7 @@ const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
 // ---------------------------------------------------------------------------
 
 const mcp = new Server(
-  { name: 'telegram-unleashed', version: '1.4.0' },
+  { name: 'telegram-unleashed', version: '1.5.0' },
   {
     capabilities: {
       tools: {},
