@@ -18,7 +18,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import { Bot, GrammyError, type Context } from 'grammy'
-import { readFileSync, writeFileSync, mkdirSync, rmSync } from 'fs'
+import { readFileSync, writeFileSync, mkdirSync, rmSync, readlinkSync } from 'fs'
+import { execSync, execFileSync } from 'child_process'
 
 import {
   API_ROOT,
@@ -63,6 +64,219 @@ if (!TOKEN) {
 
 mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
 mkdirSync(INBOX_DIR, { recursive: true })
+
+// Die neueste Sitzung übernimmt den Token.
+//
+// Telegram liefert jedes Update nur an EINEN Abrufer. Zwei laufende Sitzungen
+// bedeuten deshalb nicht doppelte Zustellung, sondern eine Verlosung: Mal
+// bekommt die eine die Nachricht, mal die andere — und in dem Fenster, in dem
+// der Nutzer gerade sitzt, kommt sie womöglich nie an. Bisher endete das in
+// 409-Schleifen, in denen der ÄLTERE Poller gewann, weil der neue nur wartete.
+// Ein Prozess von gestern Abend hielt so den Kanal, während vorne niemand
+// verstand, warum nichts ankommt.
+//
+// Regel deshalb: Wer neu startet, gewinnt. Das ist die einzige Wahl, die sich
+// mit der Erwartung deckt — das zuletzt geöffnete Fenster ist das, in dem
+// gearbeitet wird. Der alte Prozess bekommt ein SIGTERM; wer das in einer
+// Fehlerschleife nicht mehr verarbeitet, wird hart beendet.
+function lebt(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Andere laufende Ausgaben dieses Plugins finden.
+ *
+ * Die PID-Datei allein reicht nicht: Sie wird beim sauberen Beenden gelöscht,
+ * aber ein Prozess, dem das Fenster unter den Füssen weggebrochen ist, räumt
+ * sie nicht ab — und umgekehrt gab es hier den Fall, dass die Datei fehlte,
+ * während ein Poller von gestern Abend den Token noch hielt. Ohne diesen
+ * Rückfall bliebe die Übernahme wirkungslos, genau wenn sie gebraucht wird.
+ */
+type FremdeSitzungen = { poller: number[]; starter: number[] }
+
+/**
+ * Arbeitsverzeichnisse fremder Prozesse nachschlagen.
+ *
+ * Für einen Poller, dessen Starter nicht mehr lebt, ist das der einzige
+ * verbliebene Fingerabdruck: Seine Kommandozeile lautet nur noch
+ * `bun run src/index.ts` und ist von jedem beliebigen anderen Bun-Prozess
+ * nicht zu unterscheiden.
+ */
+function arbeitsverzeichnisse(pids: number[]): Map<number, string> {
+  const karte = new Map<number, string>()
+  if (pids.length === 0) return karte
+
+  if (process.platform === 'linux') {
+    for (const p of pids) {
+      try {
+        karte.set(p, readlinkSync(`/proc/${p}/cwd`))
+      } catch {
+        /* Prozess inzwischen weg oder fremder Nutzer */
+      }
+    }
+    return karte
+  }
+
+  try {
+    // execFileSync statt execSync: keine Shell, also auch keine Zeichenkette,
+    // in die sich etwas hineininterpretieren liesse.
+    const aus = execFileSync('lsof', ['-a', '-p', pids.join(','), '-d', 'cwd', '-Fpn'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore']
+    })
+    let aktuell = 0
+    for (const zeile of aus.split('\n')) {
+      if (zeile.startsWith('p')) aktuell = parseInt(zeile.slice(1), 10)
+      else if (zeile.startsWith('n') && aktuell) karte.set(aktuell, zeile.slice(1))
+    }
+  } catch {
+    /* ohne lsof bleibt es bei der Erkennung über den Elternprozess */
+  }
+  return karte
+}
+
+function fremdePoller(): FremdeSitzungen {
+  const leer: FremdeSitzungen = { poller: [], starter: [] }
+  if (process.platform === 'win32') return leer
+  try {
+    // Zwei Zeilen pro Instanz: der Starter, dessen Kommandozeile den
+    // Plugin-Pfad trägt (`bun run --cwd …/telegram-unleashed/… start`), und
+    // sein Kind, das nur noch `bun run src/index.ts` heisst. Das Kind ist der
+    // Poller, aber erkennbar ist es NUR über den Elternprozess — ein Filter,
+    // der beides in derselben Zeile sucht, findet nie etwas.
+    const zeilen = execSync('ps -axo pid=,ppid=,command=', { encoding: 'utf8' })
+      .split('\n')
+      .map(z => z.trim())
+      .filter(Boolean)
+      .map(z => {
+        const teile = z.split(/\s+/)
+        return {
+          pid: parseInt(teile[0], 10),
+          ppid: parseInt(teile[1], 10),
+          befehl: teile.slice(2).join(' ')
+        }
+      })
+      .filter(e => Number.isInteger(e.pid))
+
+    // Die eigene Ahnenreihe — jeder Vorfahr bis hinauf zu init.
+    //
+    // Nur den direkten Elternprozess zu verschonen genügt nicht: Zwischen
+    // Poller und Sitzung hängen je nach Start ein oder zwei weitere Prozesse,
+    // und einer davon ist die Claude-Sitzung selbst. Wer die abschiesst, nimmt
+    // dem Nutzer das Fenster weg, in dem er gerade arbeitet.
+    const eltern = new Map(zeilen.map(e => [e.pid, e.ppid]))
+    const ahnen = new Set<number>()
+    for (let p = process.pid; p && p !== 1 && !ahnen.has(p); p = eltern.get(p) ?? 0) {
+      ahnen.add(p)
+    }
+
+    // Ein Starter ist ein Prozess, der dieses Plugin-Verzeichnis auf der
+    // Kommandozeile trägt (`bun run --cwd <root> … start`). Auf den blossen
+    // Namen zu prüfen wäre zu grob: Die Sitzung wird als
+    // `claude --channels plugin:telegram-unleashed@hunch …` gestartet und
+    // enthält ihn ebenfalls.
+    const wurzel = process.cwd()
+    const starter = new Set(
+      zeilen
+        .filter(e => e.befehl.includes(wurzel) && !ahnen.has(e.pid))
+        .map(e => e.pid)
+    )
+    const poller = new Set<number>()
+    const waisen: number[] = []
+    for (const e of zeilen) {
+      if (!e.befehl.includes('src/index.ts')) continue
+      if (ahnen.has(e.pid)) continue
+      if (starter.has(e.ppid)) poller.add(e.pid)
+      else waisen.push(e.pid)
+    }
+
+    // Stirbt ein Starter, erbt init sein Kind — und damit fällt der Poller aus
+    // der Erkennung über den Elternprozess heraus. Genau dieser Waise blockiert
+    // den Kanal am hartnäckigsten: Er läuft weiter, hält den Token, und jeder
+    // spätere Start sieht ihn nicht. Sein Arbeitsverzeichnis verrät ihn — es
+    // ist dasselbe, aus dem auch wir gestartet wurden.
+    if (waisen.length > 0) {
+      const eigenes = process.cwd()
+      for (const [pid, verzeichnis] of arbeitsverzeichnisse(waisen)) {
+        if (verzeichnis === eigenes) poller.add(pid)
+      }
+    }
+
+    // Die eigene Kette bleibt verschont — alles andere ist eine fremde Sitzung.
+    for (const a of ahnen) poller.delete(a)
+
+    return { poller: [...poller].filter(lebt), starter: [...starter].filter(lebt) }
+  } catch {
+    return leer
+  }
+}
+
+/**
+ * Eine Gruppe von Prozessen beenden — höflich, dann bestimmt.
+ *
+ * Ein Poller, der in der 409-Schleife hängt, verarbeitet unter Umständen kein
+ * SIGTERM mehr. Bliebe es dabei, hielte er den Token weiter und der ganze
+ * Übernahmeversuch liefe ins Leere.
+ */
+async function beenden(pids: number[], was: string): Promise<boolean> {
+  const angeschrieben = pids.filter(lebt)
+  if (angeschrieben.length === 0) return false
+
+  for (const p of angeschrieben) {
+    try {
+      process.kill(p, 'SIGTERM')
+      trace(`Token übernommen von ${was} ${p}`)
+    } catch {
+      /* schon weg */
+    }
+  }
+
+  await new Promise(fertig => setTimeout(fertig, 800))
+
+  for (const p of angeschrieben) {
+    if (!lebt(p)) continue
+    try {
+      process.kill(p, 'SIGKILL')
+      trace(`${was} ${p} reagierte nicht auf SIGTERM — hart beendet`)
+    } catch {
+      /* in der Zwischenzeit doch gegangen */
+    }
+  }
+  return true
+}
+
+// Wer neu startet, gewinnt: erst die eingetragene PID, dann alles, was sonst
+// noch pollt.
+const fremd = fremdePoller()
+const pollerZuBeenden = new Set<number>(fremd.poller)
+try {
+  const eingetragen = parseInt(readFileSync(PID_FILE, 'utf8'), 10)
+  if (Number.isInteger(eingetragen) && eingetragen > 0 && eingetragen !== process.pid) {
+    pollerZuBeenden.add(eingetragen)
+  }
+} catch {
+  /* keine oder unlesbare Datei — dann entscheidet die Prozessliste */
+}
+
+// Reihenfolge ist hier kein Detail: Stirbt der Starter zuerst, wird sein noch
+// laufender Poller an init weitergereicht — und ist damit die Waise, die der
+// nächste Start nicht mehr zuordnen kann. Also erst die Poller, dann die
+// Starter, die sie sonst neu aufziehen.
+const pollerBeendet = await beenden([...pollerZuBeenden], 'PID')
+const starterBeendet = await beenden(fremd.starter, 'Starter')
+
+if (pollerBeendet || starterBeendet) {
+  // Telegram gibt den Abruf erst frei, wenn die alte Verbindung wirklich zu
+  // ist. Ohne diese kurze Pause läuft der eigene Start in genau das 409, das
+  // hier vermieden werden soll.
+  await new Promise(fertig => setTimeout(fertig, 1500))
+}
+
 writeFileSync(PID_FILE, String(process.pid))
 
 // A crash in one handler must never take down the bridge.
@@ -102,7 +316,7 @@ const PERMISSION_REPLY_RE = /^\s*(y|yes|n|no)\s+([a-km-z]{5})\s*$/i
 // ---------------------------------------------------------------------------
 
 const mcp = new Server(
-  { name: 'telegram-unleashed', version: '1.3.0' },
+  { name: 'telegram-unleashed', version: '1.4.0' },
   {
     capabilities: {
       tools: {},
@@ -560,8 +774,23 @@ bot.catch(err => {
 // Polling with backoff
 // ---------------------------------------------------------------------------
 
+// Das Menü gehört zum Prozess, nicht zur Verbindung.
+//
+// `onStart` feuert bei jedem Reconnect. Wird das Menü dort veröffentlicht,
+// zahlt jede Verdrängung durch einen konkurrierenden Poller einen
+// `setMyCommands`-Aufruf mit über 50 Einträgen — und genau diese Serie zählt
+// Telegram als Flood. Am 2026-08-08 kostete das acht Stunden Sperre, am
+// 2026-08-16 noch einmal gut zwei. Einmal pro Prozess genügt: Was installiert
+// ist, ändert sich innerhalb einer Sitzung nicht.
+let menueVeroeffentlicht = false
+
 void (async () => {
   for (let attempt = 1; ; attempt++) {
+    // Eine Verbindung, die sofort wieder wegbricht, war kein Erfolg. Der
+    // Backoff darf deshalb erst zurückgesetzt werden, wenn sie eine Weile
+    // gehalten hat — sonst sieht eine 409-Verdrängung wie ein sauberer Start
+    // aus und der Neuversuch prasselt ohne Wartezeit weiter.
+    let seitStart = 0
     try {
       await bot.start({
         allowed_updates: [
@@ -573,7 +802,7 @@ void (async () => {
           'my_chat_member',
         ],
         onStart: info => {
-          attempt = 0
+          seitStart = Date.now()
           setBotUsername(info.username)
           trace(`polling started as @${info.username}`)
           process.stderr.write(
@@ -581,9 +810,17 @@ void (async () => {
           )
           // The menu is built from what is installed right now, so it stays
           // accurate across plugin changes without anyone maintaining a list.
+          if (menueVeroeffentlicht) return
+          menueVeroeffentlicht = true
           void publishMenu(bot)
             .then(n => trace(`command menu published (${n} entries)`))
-            .catch(err => trace(`command menu failed: ${err}`))
+            .catch(err => {
+              // Beim nächsten Verbindungsaufbau noch einmal versuchen — sonst
+              // bliebe das Menü nach einem einzelnen Fehlschlag für die
+              // Lebensdauer des Prozesses leer.
+              menueVeroeffentlicht = false
+              trace(`command menu failed: ${err}`)
+            })
         },
       })
       return // clean stop
@@ -591,6 +828,11 @@ void (async () => {
       if (shuttingDown) return
       if (err instanceof Error && err.message === 'Aborted delay') return
       const is409 = err instanceof GrammyError && err.error_code === 409
+      // Erst eine Verbindung, die 30 Sekunden gehalten hat, zählt als Erfolg
+      // und setzt die Wartezeit zurück.
+      // attempt = 0, weil der Schleifenkopf gleich wieder hochzählt — die
+      // nächste Wartezeit ist damit dieselbe wie beim ersten Versuch.
+      if (seitStart > 0 && Date.now() - seitStart >= 30_000) attempt = 0
       const delay = Math.min(1000 * 2 ** Math.min(attempt - 1, 16), 60000)
       const detail = is409
         ? `409 Conflict${attempt === 1 ? ' — another poller holds this token (zombie session, or the old plugin still enabled?)' : ''}`
