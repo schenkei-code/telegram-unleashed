@@ -71,31 +71,26 @@ Für eine spätere Version:
 claude --dangerously-load-development-channels plugin:telegram-unleashed@hunch
 ```
 
-**Das ist der Schritt, der stillschweigend einen Nachmittag kostet.** Das Plugin
-zu installieren lädt seine Werkzeuge — Senden funktioniert also sofort und alles
-sieht richtig aus. Eingehende Nachrichten gehen aber nur an eine Sitzung, die
-danach gefragt hat. Ohne dieses Flag kannst du dem Bot den ganzen Tag schreiben,
-und es kommt nichts an.
+Dieses Flag ist erforderlich. Das Plugin zu installieren lädt seine Werkzeuge,
+Senden funktioniert also sofort — eingehende Nachrichten gehen aber nur an eine
+Sitzung, die danach gefragt hat. Ohne das Flag kommt nichts an.
 
-**Setze nicht zusätzlich `--channels`.** Das ist die naheliegende Vermutung, und
-es ist genau die, die scheitert. Die Freigabe gilt pro Eintrag, und
+`--dangerously-load-development-channels` **ersetzt** `--channels`, es steht
+nicht daneben. Die Freigabe gilt pro Eintrag;
 [die Doku](https://code.claude.com/docs/en/channels-reference#test-during-the-research-preview)
-sagt es ausdrücklich: *„Combining this flag with `--channels` doesn't extend the
-bypass to the `--channels` entries."* Ein Eintrag in `--channels` wird gegen
-Anthropics kuratierte Allowlist geprüft, auf der ein Plugin aus einem eigenen
-Marketplace nie steht — er wird also verworfen mit `plugin
-telegram-unleashed@hunch is not on the approved channels allowlist`, während der
-Dev-Eintrag daneben längst registriert war. Das Dev-Flag *ersetzt* `--channels`
-hier, es ergänzt es nicht.
+sagt: *„Combining this flag with `--channels` doesn't extend the bypass to the
+`--channels` entries."* Ein Eintrag in `--channels` wird gegen Anthropics
+kuratierte Allowlist geprüft, auf der ein Plugin aus einem eigenen Marketplace
+nicht steht — er wird verworfen mit `plugin telegram-unleashed@hunch is not on
+the approved channels allowlist`.
 
-Die Syntax ist streng: Einträge müssen getaggt sein, entweder
-`plugin:<name>@<marketplace>` oder `server:<name>`. Ein blankes
-`telegram-unleashed` wird mit *entries must be tagged* abgelehnt. Seit Claude
-Code 2.1.233 nimmt das Flag seine Einträge als Argumente und bricht ohne sie mit
-`error: option ... argument missing` ab.
+Einträge müssen getaggt sein — `plugin:<name>@<marketplace>` oder
+`server:<name>`. Ein blankes `telegram-unleashed` wird mit *entries must be
+tagged* abgelehnt. Seit Claude Code 2.1.233 nimmt das Flag seine Einträge als
+Argumente und bricht ohne sie mit `error: option ... argument missing` ab.
 
 Beim Start erscheint eine Vollbild-Warnung — wähle **I am using this for local
-development**. Beide Flags stehen nicht in `claude --help`, existieren aber.
+development**. Beide Flags stehen nicht in `claude --help`.
 
 ### 6. Koppeln
 
@@ -383,9 +378,10 @@ kaputtmachen.
 
 Zwei Modi. Umschalten geht aus dem Chat heraus mit `/feed` — die Karte hat einen
 Knopf je Modus, und `/feed off` / `/feed on` sind die getippte Kurzform für
-beide. Der Hook ist pro Ereignis ein eigener Prozess, eine Änderung greift also
-beim nächsten Schritt, ohne Neustart. Der Wert steht als `feedMode` in
-`access.json`:
+beide. Dasselbe `/feed` gibt es auch als Slash-Befehl in Claude Code, der
+Schalter ist also aus dem Terminal erreichbar, das der Feed spiegelt. Der Hook
+ist pro Ereignis ein eigener Prozess, eine Änderung greift also beim nächsten
+Schritt, ohne Neustart. Der Wert steht als `feedMode` in `access.json`:
 
 | Modus | Bedeutung |
 |---|---|

@@ -71,29 +71,26 @@ To pull a later version:
 claude --dangerously-load-development-channels plugin:telegram-unleashed@hunch
 ```
 
-**This is the step that silently costs people an afternoon.** Installing the
-plugin loads its tools, so sending *out* works immediately and everything looks
-fine — but inbound messages are only routed to a session that asked for them.
-Without this flag you can message the bot all day and nothing arrives.
+This flag is required. Installing the plugin loads its tools, so sending *out*
+works right away — but inbound messages are routed only to a session that asked
+for them. Without it, nothing arrives.
 
-**Do not add `--channels` as well.** It is the obvious guess, and it is the one
-that fails. The bypass is per-entry, and
+Use `--dangerously-load-development-channels` **instead of** `--channels`, not
+alongside it. The bypass is per-entry:
 [the docs](https://code.claude.com/docs/en/channels-reference#test-during-the-research-preview)
-are explicit: *"Combining this flag with `--channels` doesn't extend the bypass
-to the `--channels` entries."* A `--channels` entry is checked against
-Anthropic's curated allowlist, which a plugin from your own marketplace is never
-on, so it is dropped with `plugin telegram-unleashed@hunch is not on the
-approved channels allowlist` — while the development entry beside it was already
-registered. The development flag *replaces* `--channels` here; it does not
-supplement it.
+state that *"Combining this flag with `--channels` doesn't extend the bypass to
+the `--channels` entries."* A `--channels` entry is checked against Anthropic's
+curated allowlist, which a plugin from your own marketplace is not on, so it is
+dropped with `plugin telegram-unleashed@hunch is not on the approved channels
+allowlist`.
 
-The syntax is strict: entries must be tagged, either `plugin:<name>@<marketplace>`
-or `server:<name>`. A bare `telegram-unleashed` is rejected with *entries must be
-tagged*. Since Claude Code 2.1.233 the flag takes its entries as arguments and
-fails with `error: option ... argument missing` if given none.
+Entries must be tagged — `plugin:<name>@<marketplace>` or `server:<name>`. A
+bare `telegram-unleashed` is rejected with *entries must be tagged*. Since
+Claude Code 2.1.233 the flag takes its entries as arguments and fails with
+`error: option ... argument missing` if given none.
 
 A full-screen warning appears at startup — choose **I am using this for local
-development**. Neither flag is listed in `claude --help`, but both exist.
+development**. Neither flag is listed in `claude --help`.
 
 ### 6. Pair
 
@@ -371,9 +368,11 @@ notifications are suppressed, and every failure path exits 0: a broken feed must
 never break the turn.
 
 Two modes. Switch them from the chat with `/feed` — the card has a button per
-mode, and `/feed off` / `/feed on` work as typed shorthand for the two. The hook
-is a separate process per event, so a change takes effect on the next step with
-no restart. The value lives in `access.json` as `feedMode`:
+mode, and `/feed off` / `/feed on` work as typed shorthand for the two. The same
+`/feed` also exists as a Claude Code slash command, so the switch is reachable
+from the terminal the feed is mirroring. The hook is a separate process per
+event, so a change takes effect on the next step with no restart. The value
+lives in `access.json` as `feedMode`:
 
 | Mode | Meaning |
 |---|---|
