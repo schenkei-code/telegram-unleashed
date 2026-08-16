@@ -65,21 +65,21 @@ if (!TOKEN) {
 mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
 mkdirSync(INBOX_DIR, { recursive: true })
 
-// Die neueste Sitzung übernimmt den Token.
+// The newest session takes the token.
 //
-// Telegram liefert jedes Update nur an EINEN Abrufer. Zwei laufende Sitzungen
-// bedeuten deshalb nicht doppelte Zustellung, sondern eine Verlosung: Mal
-// bekommt die eine die Nachricht, mal die andere — und in dem Fenster, in dem
-// der Nutzer gerade sitzt, kommt sie womöglich nie an. Bisher endete das in
-// 409-Schleifen, in denen der ÄLTERE Poller gewann, weil der neue nur wartete.
-// Ein Prozess von gestern Abend hielt so den Kanal, während vorne niemand
-// verstand, warum nichts ankommt.
+// Telegram hands each update to exactly ONE poller. Two running sessions
+// therefore do not mean double delivery, they mean a raffle: sometimes one gets
+// the message, sometimes the other — and the window the user is actually
+// sitting in may never receive it at all. It used to end in 409 loops where the
+// OLDER poller won, because the new one only ever waited. A process from the
+// night before could hold the channel while nobody up front understood why
+// nothing arrived.
 //
-// Regel deshalb: Wer neu startet, gewinnt. Das ist die einzige Wahl, die sich
-// mit der Erwartung deckt — das zuletzt geöffnete Fenster ist das, in dem
-// gearbeitet wird. Der alte Prozess bekommt ein SIGTERM; wer das in einer
-// Fehlerschleife nicht mehr verarbeitet, wird hart beendet.
-function lebt(pid: number): boolean {
+// Hence the rule: whoever starts last wins. It is the only choice that matches
+// the expectation — the most recently opened window is the one being worked in.
+// The old process gets a SIGTERM; one that no longer processes signals because
+// it is spinning in an error loop is killed outright.
+function alive(pid: number): boolean {
   try {
     process.kill(pid, 0)
     return true
@@ -89,192 +89,188 @@ function lebt(pid: number): boolean {
 }
 
 /**
- * Andere laufende Ausgaben dieses Plugins finden.
+ * Other running instances of this plugin.
  *
- * Die PID-Datei allein reicht nicht: Sie wird beim sauberen Beenden gelöscht,
- * aber ein Prozess, dem das Fenster unter den Füssen weggebrochen ist, räumt
- * sie nicht ab — und umgekehrt gab es hier den Fall, dass die Datei fehlte,
- * während ein Poller von gestern Abend den Token noch hielt. Ohne diesen
- * Rückfall bliebe die Übernahme wirkungslos, genau wenn sie gebraucht wird.
+ * The PID file alone is not enough: it is removed on a clean exit, but a
+ * process whose window was pulled out from under it never cleans up — and the
+ * reverse happened too, the file missing while last night's poller still held
+ * the token. Without this fallback the takeover would be useless exactly when
+ * it is needed.
  */
-type FremdeSitzungen = { poller: number[]; starter: number[] }
+type ForeignSessions = { pollers: number[]; starters: number[] }
 
 /**
- * Arbeitsverzeichnisse fremder Prozesse nachschlagen.
+ * Look up the working directory of foreign processes.
  *
- * Für einen Poller, dessen Starter nicht mehr lebt, ist das der einzige
- * verbliebene Fingerabdruck: Seine Kommandozeile lautet nur noch
- * `bun run src/index.ts` und ist von jedem beliebigen anderen Bun-Prozess
- * nicht zu unterscheiden.
+ * For a poller whose starter is gone this is the only fingerprint left: its
+ * command line reads `bun run src/index.ts` and nothing more, which makes it
+ * indistinguishable from any other Bun process.
  */
-function arbeitsverzeichnisse(pids: number[]): Map<number, string> {
-  const karte = new Map<number, string>()
-  if (pids.length === 0) return karte
+function workingDirs(pids: number[]): Map<number, string> {
+  const dirs = new Map<number, string>()
+  if (pids.length === 0) return dirs
 
   if (process.platform === 'linux') {
     for (const p of pids) {
       try {
-        karte.set(p, readlinkSync(`/proc/${p}/cwd`))
+        dirs.set(p, readlinkSync(`/proc/${p}/cwd`))
       } catch {
-        /* Prozess inzwischen weg oder fremder Nutzer */
+        /* process gone in the meantime, or owned by another user */
       }
     }
-    return karte
+    return dirs
   }
 
   try {
-    // execFileSync statt execSync: keine Shell, also auch keine Zeichenkette,
-    // in die sich etwas hineininterpretieren liesse.
-    const aus = execFileSync('lsof', ['-a', '-p', pids.join(','), '-d', 'cwd', '-Fpn'], {
+    // execFileSync rather than execSync: no shell, so no command string for
+    // anything to be interpreted into.
+    const out = execFileSync('lsof', ['-a', '-p', pids.join(','), '-d', 'cwd', '-Fpn'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore']
     })
-    let aktuell = 0
-    for (const zeile of aus.split('\n')) {
-      if (zeile.startsWith('p')) aktuell = parseInt(zeile.slice(1), 10)
-      else if (zeile.startsWith('n') && aktuell) karte.set(aktuell, zeile.slice(1))
+    let current = 0
+    for (const line of out.split('\n')) {
+      if (line.startsWith('p')) current = parseInt(line.slice(1), 10)
+      else if (line.startsWith('n') && current) dirs.set(current, line.slice(1))
     }
   } catch {
-    /* ohne lsof bleibt es bei der Erkennung über den Elternprozess */
+    /* without lsof, detection falls back to the parent relationship alone */
   }
-  return karte
+  return dirs
 }
 
-function fremdePoller(): FremdeSitzungen {
-  const leer: FremdeSitzungen = { poller: [], starter: [] }
-  if (process.platform === 'win32') return leer
+function foreignPollers(): ForeignSessions {
+  const none: ForeignSessions = { pollers: [], starters: [] }
+  if (process.platform === 'win32') return none
   try {
-    // Zwei Zeilen pro Instanz: der Starter, dessen Kommandozeile den
-    // Plugin-Pfad trägt (`bun run --cwd …/telegram-unleashed/… start`), und
-    // sein Kind, das nur noch `bun run src/index.ts` heisst. Das Kind ist der
-    // Poller, aber erkennbar ist es NUR über den Elternprozess — ein Filter,
-    // der beides in derselben Zeile sucht, findet nie etwas.
-    const zeilen = execSync('ps -axo pid=,ppid=,command=', { encoding: 'utf8' })
+    // Two rows per instance: the starter, whose command line carries the plugin
+    // path (`bun run --cwd …/telegram-unleashed/… start`), and its child, which
+    // is only ever `bun run src/index.ts`. The child is the poller, but it is
+    // identifiable ONLY through its parent — a filter looking for both in the
+    // same line never matches anything.
+    const rows = execSync('ps -axo pid=,ppid=,command=', { encoding: 'utf8' })
       .split('\n')
-      .map(z => z.trim())
+      .map(l => l.trim())
       .filter(Boolean)
-      .map(z => {
-        const teile = z.split(/\s+/)
+      .map(l => {
+        const parts = l.split(/\s+/)
         return {
-          pid: parseInt(teile[0], 10),
-          ppid: parseInt(teile[1], 10),
-          befehl: teile.slice(2).join(' ')
+          pid: parseInt(parts[0], 10),
+          ppid: parseInt(parts[1], 10),
+          command: parts.slice(2).join(' ')
         }
       })
       .filter(e => Number.isInteger(e.pid))
 
-    // Die eigene Ahnenreihe — jeder Vorfahr bis hinauf zu init.
+    // Our own ancestry — every forebear up to init.
     //
-    // Nur den direkten Elternprozess zu verschonen genügt nicht: Zwischen
-    // Poller und Sitzung hängen je nach Start ein oder zwei weitere Prozesse,
-    // und einer davon ist die Claude-Sitzung selbst. Wer die abschiesst, nimmt
-    // dem Nutzer das Fenster weg, in dem er gerade arbeitet.
-    const eltern = new Map(zeilen.map(e => [e.pid, e.ppid]))
-    const ahnen = new Set<number>()
-    for (let p = process.pid; p && p !== 1 && !ahnen.has(p); p = eltern.get(p) ?? 0) {
-      ahnen.add(p)
+    // Sparing the direct parent is not enough: depending on how it was started,
+    // one or two more processes sit between the poller and the session, and one
+    // of them is the Claude session itself. Shooting that down takes away the
+    // very window the user is working in.
+    const parents = new Map(rows.map(e => [e.pid, e.ppid]))
+    const ancestors = new Set<number>()
+    for (let p = process.pid; p && p !== 1 && !ancestors.has(p); p = parents.get(p) ?? 0) {
+      ancestors.add(p)
     }
 
-    // Ein Starter ist ein Prozess, der dieses Plugin-Verzeichnis auf der
-    // Kommandozeile trägt (`bun run --cwd <root> … start`). Auf den blossen
-    // Namen zu prüfen wäre zu grob: Die Sitzung wird als
-    // `claude --channels plugin:telegram-unleashed@hunch …` gestartet und
-    // enthält ihn ebenfalls.
-    const wurzel = process.cwd()
-    const starter = new Set(
-      zeilen
-        .filter(e => e.befehl.includes(wurzel) && !ahnen.has(e.pid))
+    // A starter is a process carrying this plugin directory on its command line
+    // (`bun run --cwd <root> … start`). Matching the bare name would be too
+    // coarse: the session itself is launched as
+    // `claude --dangerously-load-development-channels plugin:telegram-unleashed@hunch`
+    // and contains it too.
+    const root = process.cwd()
+    const starters = new Set(
+      rows
+        .filter(e => e.command.includes(root) && !ancestors.has(e.pid))
         .map(e => e.pid)
     )
-    const poller = new Set<number>()
-    const waisen: number[] = []
-    for (const e of zeilen) {
-      if (!e.befehl.includes('src/index.ts')) continue
-      if (ahnen.has(e.pid)) continue
-      if (starter.has(e.ppid)) poller.add(e.pid)
-      else waisen.push(e.pid)
+    const pollers = new Set<number>()
+    const orphans: number[] = []
+    for (const e of rows) {
+      if (!e.command.includes('src/index.ts')) continue
+      if (ancestors.has(e.pid)) continue
+      if (starters.has(e.ppid)) pollers.add(e.pid)
+      else orphans.push(e.pid)
     }
 
-    // Stirbt ein Starter, erbt init sein Kind — und damit fällt der Poller aus
-    // der Erkennung über den Elternprozess heraus. Genau dieser Waise blockiert
-    // den Kanal am hartnäckigsten: Er läuft weiter, hält den Token, und jeder
-    // spätere Start sieht ihn nicht. Sein Arbeitsverzeichnis verrät ihn — es
-    // ist dasselbe, aus dem auch wir gestartet wurden.
-    if (waisen.length > 0) {
-      const eigenes = process.cwd()
-      for (const [pid, verzeichnis] of arbeitsverzeichnisse(waisen)) {
-        if (verzeichnis === eigenes) poller.add(pid)
+    // When a starter dies, init inherits its child — and the poller drops out
+    // of parent-based detection. That orphan blocks the channel most stubbornly
+    // of all: it keeps running, keeps the token, and no later start can see it.
+    // Its working directory gives it away — the same one we were started from.
+    if (orphans.length > 0) {
+      for (const [pid, dir] of workingDirs(orphans)) {
+        if (dir === root) pollers.add(pid)
       }
     }
 
-    // Die eigene Kette bleibt verschont — alles andere ist eine fremde Sitzung.
-    for (const a of ahnen) poller.delete(a)
+    // Our own chain stays untouched — everything else is a foreign session.
+    for (const a of ancestors) pollers.delete(a)
 
-    return { poller: [...poller].filter(lebt), starter: [...starter].filter(lebt) }
+    return { pollers: [...pollers].filter(alive), starters: [...starters].filter(alive) }
   } catch {
-    return leer
+    return none
   }
 }
 
 /**
- * Eine Gruppe von Prozessen beenden — höflich, dann bestimmt.
+ * End a group of processes — politely, then firmly.
  *
- * Ein Poller, der in der 409-Schleife hängt, verarbeitet unter Umständen kein
- * SIGTERM mehr. Bliebe es dabei, hielte er den Token weiter und der ganze
- * Übernahmeversuch liefe ins Leere.
+ * A poller stuck in the 409 loop may no longer process SIGTERM at all. Left at
+ * that, it would keep the token and the whole takeover would come to nothing.
  */
-async function beenden(pids: number[], was: string): Promise<boolean> {
-  const angeschrieben = pids.filter(lebt)
-  if (angeschrieben.length === 0) return false
+async function endAll(pids: number[], label: string): Promise<boolean> {
+  const signalled = pids.filter(alive)
+  if (signalled.length === 0) return false
 
-  for (const p of angeschrieben) {
+  for (const p of signalled) {
     try {
       process.kill(p, 'SIGTERM')
-      trace(`Token übernommen von ${was} ${p}`)
+      trace(`took the token from ${label} ${p}`)
     } catch {
-      /* schon weg */
+      /* already gone */
     }
   }
 
-  await new Promise(fertig => setTimeout(fertig, 800))
+  await new Promise(done => setTimeout(done, 800))
 
-  for (const p of angeschrieben) {
-    if (!lebt(p)) continue
+  for (const p of signalled) {
+    if (!alive(p)) continue
     try {
       process.kill(p, 'SIGKILL')
-      trace(`${was} ${p} reagierte nicht auf SIGTERM — hart beendet`)
+      trace(`${label} ${p} ignored SIGTERM — killed`)
     } catch {
-      /* in der Zwischenzeit doch gegangen */
+      /* went away in the meantime after all */
     }
   }
   return true
 }
 
-// Wer neu startet, gewinnt: erst die eingetragene PID, dann alles, was sonst
-// noch pollt.
-const fremd = fremdePoller()
-const pollerZuBeenden = new Set<number>(fremd.poller)
+// Whoever starts last wins: the recorded PID first, then anything else found
+// polling.
+const foreign = foreignPollers()
+const pollersToEnd = new Set<number>(foreign.pollers)
 try {
-  const eingetragen = parseInt(readFileSync(PID_FILE, 'utf8'), 10)
-  if (Number.isInteger(eingetragen) && eingetragen > 0 && eingetragen !== process.pid) {
-    pollerZuBeenden.add(eingetragen)
+  const recorded = parseInt(readFileSync(PID_FILE, 'utf8'), 10)
+  if (Number.isInteger(recorded) && recorded > 0 && recorded !== process.pid) {
+    pollersToEnd.add(recorded)
   }
 } catch {
-  /* keine oder unlesbare Datei — dann entscheidet die Prozessliste */
+  /* missing or unreadable file — then the process list decides */
 }
 
-// Reihenfolge ist hier kein Detail: Stirbt der Starter zuerst, wird sein noch
-// laufender Poller an init weitergereicht — und ist damit die Waise, die der
-// nächste Start nicht mehr zuordnen kann. Also erst die Poller, dann die
-// Starter, die sie sonst neu aufziehen.
-const pollerBeendet = await beenden([...pollerZuBeenden], 'PID')
-const starterBeendet = await beenden(fremd.starter, 'Starter')
+// The order is not a detail here: kill the starter first and its still-running
+// poller is handed to init, becoming the very orphan the next start can no
+// longer attribute to anyone. So pollers first, then the starters that would
+// otherwise raise them again.
+const endedPollers = await endAll([...pollersToEnd], 'poller')
+const endedStarters = await endAll(foreign.starters, 'starter')
 
-if (pollerBeendet || starterBeendet) {
-  // Telegram gibt den Abruf erst frei, wenn die alte Verbindung wirklich zu
-  // ist. Ohne diese kurze Pause läuft der eigene Start in genau das 409, das
-  // hier vermieden werden soll.
-  await new Promise(fertig => setTimeout(fertig, 1500))
+if (endedPollers || endedStarters) {
+  // Telegram only releases the poll once the old connection is really closed.
+  // Without this short pause our own start runs straight into the very 409 this
+  // is meant to avoid.
+  await new Promise(done => setTimeout(done, 1500))
 }
 
 writeFileSync(PID_FILE, String(process.pid))
@@ -774,23 +770,22 @@ bot.catch(err => {
 // Polling with backoff
 // ---------------------------------------------------------------------------
 
-// Das Menü gehört zum Prozess, nicht zur Verbindung.
+// The menu belongs to the process, not to the connection.
 //
-// `onStart` feuert bei jedem Reconnect. Wird das Menü dort veröffentlicht,
-// zahlt jede Verdrängung durch einen konkurrierenden Poller einen
-// `setMyCommands`-Aufruf mit über 50 Einträgen — und genau diese Serie zählt
-// Telegram als Flood. Am 2026-08-08 kostete das acht Stunden Sperre, am
-// 2026-08-16 noch einmal gut zwei. Einmal pro Prozess genügt: Was installiert
-// ist, ändert sich innerhalb einer Sitzung nicht.
-let menueVeroeffentlicht = false
+// `onStart` fires on every reconnect. Publishing the menu there makes every
+// eviction by a competing poller cost a `setMyCommands` call with more than 50
+// entries — and that series is exactly what Telegram counts as flooding. On
+// 2026-08-08 it cost eight hours of lockout, on 2026-08-16 another two. Once
+// per process is enough: what is installed does not change mid-session.
+let menuPublished = false
 
 void (async () => {
   for (let attempt = 1; ; attempt++) {
-    // Eine Verbindung, die sofort wieder wegbricht, war kein Erfolg. Der
-    // Backoff darf deshalb erst zurückgesetzt werden, wenn sie eine Weile
-    // gehalten hat — sonst sieht eine 409-Verdrängung wie ein sauberer Start
-    // aus und der Neuversuch prasselt ohne Wartezeit weiter.
-    let seitStart = 0
+    // A connection that drops again immediately was not a success. The backoff
+    // may therefore only reset once it has held for a while — otherwise a 409
+    // eviction looks like a clean start and the retries hammer on with no wait
+    // between them.
+    let connectedAt = 0
     try {
       await bot.start({
         allowed_updates: [
@@ -802,7 +797,7 @@ void (async () => {
           'my_chat_member',
         ],
         onStart: info => {
-          seitStart = Date.now()
+          connectedAt = Date.now()
           setBotUsername(info.username)
           trace(`polling started as @${info.username}`)
           process.stderr.write(
@@ -810,15 +805,14 @@ void (async () => {
           )
           // The menu is built from what is installed right now, so it stays
           // accurate across plugin changes without anyone maintaining a list.
-          if (menueVeroeffentlicht) return
-          menueVeroeffentlicht = true
+          if (menuPublished) return
+          menuPublished = true
           void publishMenu(bot)
             .then(n => trace(`command menu published (${n} entries)`))
             .catch(err => {
-              // Beim nächsten Verbindungsaufbau noch einmal versuchen — sonst
-              // bliebe das Menü nach einem einzelnen Fehlschlag für die
-              // Lebensdauer des Prozesses leer.
-              menueVeroeffentlicht = false
+              // Try again on the next connection — otherwise a single failure
+              // would leave the menu empty for the lifetime of the process.
+              menuPublished = false
               trace(`command menu failed: ${err}`)
             })
         },
@@ -828,11 +822,10 @@ void (async () => {
       if (shuttingDown) return
       if (err instanceof Error && err.message === 'Aborted delay') return
       const is409 = err instanceof GrammyError && err.error_code === 409
-      // Erst eine Verbindung, die 30 Sekunden gehalten hat, zählt als Erfolg
-      // und setzt die Wartezeit zurück.
-      // attempt = 0, weil der Schleifenkopf gleich wieder hochzählt — die
-      // nächste Wartezeit ist damit dieselbe wie beim ersten Versuch.
-      if (seitStart > 0 && Date.now() - seitStart >= 30_000) attempt = 0
+      // Only a connection that held for 30 seconds counts as a success and
+      // resets the wait. attempt = 0 because the loop head increments again in
+      // a moment, making the next wait the same as on the very first attempt.
+      if (connectedAt > 0 && Date.now() - connectedAt >= 30_000) attempt = 0
       const delay = Math.min(1000 * 2 ** Math.min(attempt - 1, 16), 60000)
       const detail = is409
         ? `409 Conflict${attempt === 1 ? ' — another poller holds this token (zombie session, or the old plugin still enabled?)' : ''}`
