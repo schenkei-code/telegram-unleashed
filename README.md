@@ -9,10 +9,12 @@ Answers that write themselves out word by word. An activity feed that shows the
 work as it happens. Formatting that never breaks, files that behave like files,
 and decisions you settle with a thumb.
 
-[![version](https://img.shields.io/badge/version-1.2.0-ff8a1e?style=flat-square&labelColor=0f0f12)](https://github.com/schenkei-code/telegram-unleashed/releases)
+[![version](https://img.shields.io/badge/version-1.5.0-ff8a1e?style=flat-square&labelColor=0f0f12)](https://github.com/schenkei-code/telegram-unleashed/releases)
 [![runtime](https://img.shields.io/badge/bun-no%20build%20step-ffb43e?style=flat-square&labelColor=0f0f12)](https://bun.sh)
 [![Bot API](https://img.shields.io/badge/Bot%20API-10.x-ffd24a?style=flat-square&labelColor=0f0f12)](https://core.telegram.org/bots/api)
 [![license](https://img.shields.io/badge/license-Apache--2.0-9c8657?style=flat-square&labelColor=0f0f12)](LICENSE)
+
+**English** · [Deutsch](README.de.md)
 
 </div>
 
@@ -66,19 +68,32 @@ To pull a later version:
 ### 5. Start Claude Code with the channel attached
 
 ```bash
-claude --channels plugin:telegram-unleashed@hunch --dangerously-load-development-channels
+claude --dangerously-load-development-channels plugin:telegram-unleashed@hunch
 ```
 
 **This is the step that silently costs people an afternoon.** Installing the
 plugin loads its tools, so sending *out* works immediately and everything looks
 fine — but inbound messages are only routed to a session that asked for them.
-Without `--channels` you can message the bot all day and nothing arrives.
+Without this flag you can message the bot all day and nothing arrives.
 
-The syntax is strict and undocumented: entries must be tagged, either
-`plugin:<name>@<marketplace>` or `server:<name>`. A bare `telegram-unleashed`
-is rejected with *entries must be tagged*. The second flag is needed because
-this plugin is not on Anthropic's built-in channel allowlist; without it the
-entry is refused as a development channel.
+**Do not add `--channels` as well.** It is the obvious guess, and it is the one
+that fails. The bypass is per-entry, and
+[the docs](https://code.claude.com/docs/en/channels-reference#test-during-the-research-preview)
+are explicit: *"Combining this flag with `--channels` doesn't extend the bypass
+to the `--channels` entries."* A `--channels` entry is checked against
+Anthropic's curated allowlist, which a plugin from your own marketplace is never
+on, so it is dropped with `plugin telegram-unleashed@hunch is not on the
+approved channels allowlist` — while the development entry beside it was already
+registered. The development flag *replaces* `--channels` here; it does not
+supplement it.
+
+The syntax is strict: entries must be tagged, either `plugin:<name>@<marketplace>`
+or `server:<name>`. A bare `telegram-unleashed` is rejected with *entries must be
+tagged*. Since Claude Code 2.1.233 the flag takes its entries as arguments and
+fails with `error: option ... argument missing` if given none.
+
+A full-screen warning appears at startup — choose **I am using this for local
+development**. Neither flag is listed in `claude --help`, but both exist.
 
 ### 6. Pair
 
